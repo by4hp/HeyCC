@@ -78,8 +78,8 @@ struct SettingsView: View {
     @State private var codexDay: Int
     @State private var deepseekKey: String
     @State private var userName: String
-    /// 续费日历正在编辑哪一个：0 = Claude，1 = Codex。
-    @State private var renewalTarget = 0
+    @State private var showClaudeCalendar = false
+    @State private var showCodexCalendar = false
 
     private let claudePlan: String?
     private let codexPlan: String?
@@ -150,26 +150,42 @@ struct SettingsView: View {
     }
 
     private var renewalSection: some View {
-        section("每月续费日", footnote: "在日历上选一天，就当作每月那天续费。") {
-            VStack(spacing: 10) {
-                Picker("", selection: $renewalTarget) {
-                    Text("Claude · \(claudeDay) 号").tag(0)
-                    Text("Codex · \(codexDay) 号").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-
-                DatePicker(
-                    "",
-                    selection: renewalTarget == 0 ? renewalBinding($claudeDay) : renewalBinding($codexDay),
-                    displayedComponents: .date)
-                    .datePickerStyle(.graphical)
-                    .labelsHidden()
-                    .tint(renewalTarget == 0 ? claudeTint : codexTint)
+        section("每月续费日", footnote: "点一下日期，在弹出的日历上选。") {
+            row(icon: "calendar", tint: claudeTint, title: "Claude Code") {
+                dayButton(day: $claudeDay, show: $showClaudeCalendar, tint: claudeTint)
             }
-            .padding(11)
-            .frame(maxWidth: .infinity)
+            rowDivider
+            row(icon: "calendar", tint: codexTint, title: "Codex") {
+                dayButton(day: $codexDay, show: $showCodexCalendar, tint: codexTint)
+            }
+        }
+    }
+
+    /// 「X 号」按钮，点击弹出图形日历。
+    private func dayButton(day: Binding<Int>, show: Binding<Bool>, tint: Color) -> some View {
+        Button {
+            show.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Text("\(day.wrappedValue) 号")
+                    .font(.system(size: 12, weight: .medium))
+                Image(systemName: "calendar")
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(tint.opacity(0.15)))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: show, arrowEdge: .bottom) {
+            DatePicker("", selection: renewalBinding(day), displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+                .tint(tint)
+                .padding(12)
         }
     }
 
