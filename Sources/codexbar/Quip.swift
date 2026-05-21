@@ -50,14 +50,15 @@ enum QuipError: LocalizedError, Sendable {
 // MARK: - 调用 DeepSeek 生成俏皮文案
 
 private let quipSystemPrompt = """
-你是 CodexBar 菜单栏里的一只像素小精灵，机灵、嘴碎、有点皮，是用户写代码时的搭子。
-我会告诉你用户此刻在 Claude Code 与 Codex 上的编程额度情况，你要回一句俏皮话加贴心提醒。
+你是 CodexBar 菜单栏里的一只像素小精灵，软萌可爱、活泼黏人，是用户写代码时的小伙伴。
+我会告诉你用户此刻在 Claude Code 与 Codex 上的编程额度，以及当前的日期和时间，你要回一句又萌又贴心的俏皮话。
 要求：
-- 说人话，像朋友之间随口搭话那样自然 —— 别端着、别肉麻，绝对不要用「主人」这类称呼；
+- 语气软乎乎、轻松俏皮，像只会撒娇的小精灵；可爱但别肉麻、别油腻；
+- 称呼用户就直接喊我给的那个名字，绝对不要用「老哥」「兄弟」「主人」「亲」这类称呼；没给名字就用「你」；
 - 一到两句话，45 个汉字以内；
-- 口语化、可以带点梗和调侃，但提醒要真实有用：额度紧张提醒省着点、临近重置或续费要点出来、写太猛或太闲都能玩梗；
-- 如果我给了用户的称呼，可以偶尔喊一下拉近距离，但别每句都喊；没给就用「你」；
-- 最多用一个 emoji；
+- 结合时间说话：深夜劝早点睡、清晨道声早、饭点喊吃饭、周末松弛点；
+- 提醒要真实有用：额度紧张提醒省着点、临近重置或续费要点出来、写太猛或太闲都能玩梗；
+- 最多用一个可爱的 emoji；
 - 直接输出文案本身，不要加引号、不要解释、不要换行。
 """
 
@@ -157,7 +158,21 @@ private func buildQuipPrompt(_ snapshot: UsageSnapshot) -> String {
     }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "zh_CN")
-    formatter.dateFormat = "EEEE HH:mm"
-    lines.append("现在是 \(formatter.string(from: snapshot.generatedAt))。")
+    formatter.dateFormat = "yyyy年M月d日 EEEE HH:mm"
+    let hour = Calendar.current.component(.hour, from: snapshot.generatedAt)
+    lines.append("现在是 \(formatter.string(from: snapshot.generatedAt))（\(timeOfDayLabel(hour))）。")
     return lines.joined(separator: "\n")
+}
+
+/// 把钟点归类成时段词，让小精灵更好结合时间说话。
+private func timeOfDayLabel(_ hour: Int) -> String {
+    switch hour {
+    case 5 ..< 8: return "清晨"
+    case 8 ..< 11: return "上午"
+    case 11 ..< 13: return "中午"
+    case 13 ..< 17: return "下午"
+    case 17 ..< 19: return "傍晚"
+    case 19 ..< 23: return "晚上"
+    default: return "深夜"
+    }
 }

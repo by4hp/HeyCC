@@ -112,11 +112,25 @@ final class NotchController {
         guard let screen = notchScreen else { return }
         let pointer = NSEvent.mouseLocation
         let inside = currentHotZone(on: screen).contains(pointer)
+        updatePetGaze(pointer: pointer, active: inside)
         if inside {
             if !model.expanded { setExpanded(true) }
         } else if model.expanded {
             // 离开热区即收起，无缓冲，保持跟手。
             setExpanded(false)
+        }
+    }
+
+    /// 让宠物按鼠标在整个悬浮面板里的水平位置看向左/右，而不是只在宠物本体 hover 时才动眼睛。
+    private func updatePetGaze(pointer: NSPoint, active: Bool) {
+        guard active, let window else {
+            if model.petGaze != 0 { model.petGaze = 0 }
+            return
+        }
+        let halfWidth = max(window.frame.width / 2, 1)
+        let gaze = min(max((pointer.x - window.frame.midX) / halfWidth, -1), 1)
+        if abs(model.petGaze - gaze) > 0.03 {
+            model.petGaze = gaze
         }
     }
 
@@ -135,6 +149,7 @@ final class NotchController {
 
     private func setExpanded(_ expanded: Bool) {
         model.expanded = expanded
+        if !expanded { model.petGaze = 0 }
         window?.ignoresMouseEvents = !expanded
     }
 

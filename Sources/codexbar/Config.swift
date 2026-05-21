@@ -1,5 +1,37 @@
 import Foundation
 
+/// 悬浮窗图表里 Claude 与 Codex 用量的区分方式。
+enum ChartProviderMode: String, Sendable, CaseIterable {
+    /// 一张热力图，每格按当时主导的一方双色着色。
+    case combined
+    /// 一张热力图，顶部切换只看 Claude / Codex / 合计。
+    case toggle
+
+    /// 设置面板里展示的名字。
+    var displayName: String {
+        switch self {
+        case .combined: return "双色合并"
+        case .toggle: return "切换显示"
+        }
+    }
+}
+
+/// 悬浮窗图表的时间范围。
+enum ChartRange: String, Sendable, CaseIterable {
+    /// 最近 7 天 × 12 个 2 小时段。
+    case week
+    /// 最近 13 周（约近三个月），按天聚合、GitHub 贡献图样式。
+    case month
+
+    /// 图表顶部分段控件上的短名。
+    var displayName: String {
+        switch self {
+        case .week: return "周"
+        case .month: return "月"
+        }
+    }
+}
+
 /// CodexBar 个人版的本地配置，存于 ~/.dee_codexbar/config.json。
 /// 用独立目录，避免和原版 CodexBar 的 ~/.codexbar/ 撞文件。
 /// 套餐等级不在这里 —— 由各家接口/凭证自动识别。
@@ -12,12 +44,17 @@ struct CodexBarConfig: Sendable {
     var codexRenewalDay: Int
     /// 用户希望小精灵怎么称呼自己，可为空。
     var userName: String
+    /// 悬浮窗图表里 Claude / Codex 的区分方式。
+    var chartProviderMode: ChartProviderMode
+    /// 悬浮窗图表默认的时间范围（也可在图表顶部切换）。
+    var chartRange: ChartRange
 
     static let path = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".dee_codexbar/config.json")
 
     static let defaults = CodexBarConfig(
-        deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "")
+        deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
+        chartProviderMode: .combined, chartRange: .week)
 
     /// API Key 非空时返回，否则 nil。
     var deepseekKeyIfPresent: String? {
@@ -36,7 +73,10 @@ struct CodexBarConfig: Sendable {
             claudeRenewalDay: clampDay(root["claude_renewal_day"], fallback: 3),
             codexRenewalDay: clampDay(root["codex_renewal_day"], fallback: 19),
             userName: (root["user_name"] as? String ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines))
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            chartProviderMode: ChartProviderMode(rawValue: root["chart_provider_mode"] as? String ?? "")
+                ?? .combined,
+            chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week)
     }
 
     /// 写回配置文件（带中文说明字段）。
@@ -45,12 +85,16 @@ struct CodexBarConfig: Sendable {
             at: Self.path.deletingLastPathComponent(), withIntermediateDirectories: true)
         let root: [String: Any] = [
             "_说明": "deepseek_api_key 从 https://platform.deepseek.com/api_keys 获取；"
-                + "*_renewal_day 是每月续费日；user_name 是小精灵对你的称呼。"
+                + "*_renewal_day 是每月续费日；user_name 是小精灵对你的称呼；"
+                + "chart_provider_mode 是图表区分方式（combined/toggle）；"
+                + "chart_range 是图表默认时间范围（week/month）。"
                 + "也可在 App 菜单的「设置」里改。套餐等级由接口自动识别，无需配置。",
             "deepseek_api_key": deepseekAPIKey,
             "claude_renewal_day": claudeRenewalDay,
             "codex_renewal_day": codexRenewalDay,
             "user_name": userName,
+            "chart_provider_mode": chartProviderMode.rawValue,
+            "chart_range": chartRange.rawValue,
         ]
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])

@@ -18,6 +18,8 @@ final class PanelModel: ObservableObject {
     /// 正在调用 DeepSeek 生成文案。
     @Published var quipLoading = false
     @Published var expanded = false
+    /// 鼠标相对悬浮面板中心的水平位置，-1 看左、1 看右；由 NotchController 轮询更新。
+    @Published var petGaze: CGFloat = 0
     /// 戳一下宠物时触发（由 AppDelegate 注入：刷新俏皮总结）。
     var onPokePet: (() -> Void)?
     /// 用户希望被称呼的名字（喂给俏皮总结），来自配置。
@@ -25,6 +27,12 @@ final class PanelModel: ObservableObject {
     /// 当前屏幕刘海尺寸，面板顶部用它在刘海两侧排版。
     @Published var notchHeight: CGFloat = 38
     @Published var notchWidth: CGFloat = 220
+    /// 图表时间范围（周/月），来自配置、可在图表顶部切换。
+    @Published var chartRange: ChartRange = .week
+    /// 图表里 Claude / Codex 的区分方式，来自配置、在「设置」里改。
+    @Published var chartProviderMode: ChartProviderMode = .combined
+    /// 在图表顶部切换时间范围时触发（由 AppDelegate 注入：写回配置）。
+    var onChartRangeChanged: ((ChartRange) -> Void)?
 }
 
 // MARK: - 尺寸常量
@@ -32,12 +40,24 @@ final class PanelModel: ObservableObject {
 enum NotchMetrics {
     static let panelWidth: CGFloat = 392
     /// 刘海下方的内容区高度（窗口总高 = 刘海高度 + 此值）。
-    static let contentHeight: CGFloat = 392
+    /// 留足空间让周/月热力图的方块足够大、能舒展铺开。
+    static let contentHeight: CGFloat = 430
     static let cornerRadius: CGFloat = 24
 }
 
-private let claudeAccent = Color(red: 0.86, green: 0.47, blue: 0.24)
-private let codexAccent = Color(red: 0.30, green: 0.80, blue: 0.74)
+private let claudeRGB = (r: 0.86, g: 0.47, b: 0.24)
+private let codexRGB = (r: 0.30, g: 0.80, b: 0.74)
+private let claudeAccent = Color(red: claudeRGB.r, green: claudeRGB.g, blue: claudeRGB.b)
+private let codexAccent = Color(red: codexRGB.r, green: codexRGB.g, blue: codexRGB.b)
+
+/// 在 Codex 青 ↔ Claude 橙 之间按 Claude 占比插值，用于「双色合并」热力图。
+private func blendAccent(claudeRatio: Double) -> Color {
+    let t = min(max(claudeRatio, 0), 1)
+    return Color(
+        red: codexRGB.r + (claudeRGB.r - codexRGB.r) * t,
+        green: codexRGB.g + (claudeRGB.g - codexRGB.g) * t,
+        blue: codexRGB.b + (claudeRGB.b - codexRGB.b) * t)
+}
 
 // MARK: - 面板根视图
 
@@ -75,8 +95,8 @@ struct NotchPanelView: View {
                     subscription: Subscription(renewalDay: model.codexRenewalDay),
                     accent: codexAccent)
                 Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
-                HeatmapView(history: model.history)
-                Spacer(minLength: 0)
+                ChartSection(model: model)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 QuipFooter(model: model)
             }
             .padding(.horizontal, 20)
@@ -121,8 +141,25 @@ struct NotchPanelView: View {
 struct QuipFooter: View {
     @ObservedObject var model: PanelModel
 
+    private static let footerHeight: CGFloat = 70
+    private static let bubbleHeight: CGFloat = 60
+
     @State private var displayed = ""
     @State private var shown = ""
+    @State private var loadingLine = "让我瞅瞅你今天写了多少…"
+    @State private var thinkingHold = false
+    @State private var thinkingTask: Task<Void, Never>?
+    @State private var celebrating = false
+    @State private var celebrationTask: Task<Void, Never>?
+
+    /// 生成文案期间气泡里的台词 —— 由小精灵第一人称说出，别用「正在生成」这类旁白。
+    private static let loadingLines = [
+        "让我瞅瞅你今天写了多少…",
+        "唔…我看看你的额度哈…",
+        "等等，我扒拉一下数据…",
+        "我盘盘你这周的账哦…",
+        "让我眯起眼睛看看哈…",
+    ]
 
     private enum Mode { case loading, quip, error }
     private var mode: Mode {
@@ -134,17 +171,68 @@ struct QuipFooter: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 7) {
-            PixelPet(pixel: 2.5, mood: petMood, onPoke: { model.onPokePet?() })
+            PixelPet(
+                pixel: 2.5,
+                mood: petMood,
+                gaze: model.petGaze,
+                gazeActive: model.expanded,
+                onPoke: { model.onPokePet?() })
             bubble
         }
+        .frame(height: Self.footerHeight)
         .task(id: typeKey) { await typewriter() }
+        .onChange(of: model.quipLoading) { loading in
+            holdThinkingIfNeeded(loading)
+        }
+        .onChange(of: model.quip ?? "") { quip in
+            celebrateIfNeeded(quip)
+        }
     }
 
-    /// 任一供应商 5 小时额度用到 85% 以上，小精灵就发愁。
+    /// 生成文案时小精灵进入思考态；报错/额度临界时优先示警；新文案生成完短暂庆祝；深夜会打盹。
     private var petMood: PetMood {
+        if model.quipLoading || thinkingHold { return .thinking }
+        if model.claude.error != nil || model.codex.error != nil { return .critical }
         let claude = model.claude.fiveHour?.percent ?? 0
         let codex = model.codex.fiveHour?.percent ?? 0
-        return max(claude, codex) >= 85 ? .worried : .idle
+        let maxPercent = max(claude, codex)
+        if maxPercent >= 95 { return .critical }
+        if maxPercent >= 85 { return .worried }
+        if celebrating { return .celebrate }
+        return isLateNight ? .sleepy : .idle
+    }
+
+    /// DeepSeek 失败太快时，仍保留一点思考态，避免肉眼看不到。
+    private func holdThinkingIfNeeded(_ loading: Bool) {
+        thinkingTask?.cancel()
+        if loading {
+            thinkingHold = true
+            return
+        }
+        thinkingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            if !Task.isCancelled {
+                thinkingHold = false
+            }
+        }
+    }
+
+    /// 新俏皮话出现时，让小精灵短暂庆祝一下。
+    private func celebrateIfNeeded(_ quip: String) {
+        guard !quip.isEmpty, !model.quipLoading else { return }
+        celebrationTask?.cancel()
+        celebrating = true
+        celebrationTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1600))
+            if !Task.isCancelled {
+                celebrating = false
+            }
+        }
+    }
+
+    private var isLateNight: Bool {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return hour < 6 || hour >= 23
     }
 
     /// 宠物的对话气泡，按状态切换文字。
@@ -154,7 +242,7 @@ struct QuipFooter: View {
             // 生成中：文字按正弦呼吸。
             TimelineView(.animation) { context in
                 let wave = 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * 2.6)
-                speechBubble("正在想一句俏皮话…", opacity: 0.32 + 0.26 * wave)
+                speechBubble(loadingLine, opacity: 0.32 + 0.26 * wave)
             }
         case .quip:
             speechBubble(displayed, opacity: 0.74)
@@ -169,11 +257,11 @@ struct QuipFooter: View {
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(.white.opacity(opacity))
             .lineSpacing(3)
-            .lineLimit(3)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 11)
             .padding(.vertical, 9)
+            .frame(height: Self.bubbleHeight, alignment: .center)
             .background(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(Color.white.opacity(0.06))
@@ -191,6 +279,7 @@ struct QuipFooter: View {
     private func typewriter() async {
         guard !model.quipLoading else {
             shown = ""
+            loadingLine = Self.loadingLines.randomElement() ?? loadingLine
             return
         }
         guard let quip = model.quip, !quip.isEmpty else { return }
@@ -307,75 +396,301 @@ struct ProgressBar: View {
     }
 }
 
-// MARK: - 热力图
+// MARK: - 图表区块
 
-struct HeatmapView: View {
-    let history: UsageHistory
+/// 热力图要展示的数据序列。
+enum ChartSeries: Sendable, Equatable {
+    /// Claude 与 Codex 合计（双色着色）。
+    case both
+    /// 只看 Claude。
+    case claude
+    /// 只看 Codex。
+    case codex
+}
 
-    private let cell: CGFloat = 11
-    private let gap: CGFloat = 2
-    private let labelWidth: CGFloat = 24
+/// 刘海面板里的用量图表：顶部「周 / 月」切换 + 按设置区分 Claude / Codex 的热力图。
+struct ChartSection: View {
+    @ObservedObject var model: PanelModel
+    /// 「切换显示」模式下当前选中的序列。
+    @State private var toggleSeries: ChartSeries = .both
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("最近 7 天用量")
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            if model.chartProviderMode == .toggle {
+                providerSelector
+            }
+            chartBody
+        }
+    }
+
+    private var range: ChartRange { model.chartRange }
+
+    // MARK: 顶部
+
+    private var header: some View {
+        HStack(spacing: 0) {
+            Text(range == .week ? "最近 7 天用量" : "最近三个月用量")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
-            VStack(spacing: gap) {
-                ForEach(0 ..< 7, id: \.self) { day in
-                    HStack(spacing: gap) {
-                        Text(dayLabel(day))
-                            .font(.system(size: 8.5))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .frame(width: labelWidth, alignment: .leading)
-                        ForEach(0 ..< 24, id: \.self) { hour in
-                            cellView(day: day, hour: hour)
-                        }
-                    }
-                }
-                hourAxis
+            Spacer()
+            segmented(ChartRange.allCases.map { ($0, $0.displayName) },
+                      isActive: { $0 == range }) { picked in
+                model.chartRange = picked
+                model.onChartRangeChanged?(picked)
             }
         }
     }
 
-    private func cellView(day: Int, hour: Int) -> some View {
-        let bucket = history.bucket(day: day, hour: hour)
-        return RoundedRectangle(cornerRadius: 2.5)
-            .fill(heatColor(bucket?.total ?? 0))
-            .frame(width: cell, height: cell)
-            .help(tooltip(bucket, day: day, hour: hour))
+    private var providerSelector: some View {
+        segmented([(ChartSeries.both, "合计"),
+                   (ChartSeries.claude, "Claude"),
+                   (ChartSeries.codex, "Codex")],
+                  isActive: { $0 == toggleSeries }) { toggleSeries = $0 }
     }
 
-    private var hourAxis: some View {
+    // MARK: 图表主体
+
+    @ViewBuilder private var chartBody: some View {
+        if model.history.dayCount == 0 {
+            Text("暂无用量数据")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.3))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            switch model.chartProviderMode {
+            case .combined:
+                HeatmapGrid(history: model.history, range: range, series: .both)
+            case .toggle:
+                HeatmapGrid(history: model.history, range: range, series: toggleSeries)
+            }
+        }
+    }
+
+    // MARK: 迷你分段控件
+
+    private func segmented<T: Equatable>(_ items: [(T, String)],
+                                         isActive: @escaping (T) -> Bool,
+                                         onPick: @escaping (T) -> Void) -> some View {
+        HStack(spacing: 2) {
+            ForEach(items.indices, id: \.self) { index in
+                let item = items[index]
+                let active = isActive(item.0)
+                Button { onPick(item.0) } label: {
+                    Text(item.1)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(active ? 0.95 : 0.4))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(Capsule().fill(Color.white.opacity(active ? 0.16 : 0)))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+// MARK: - 热力图
+
+/// 单张热力图：周视图为 7 天 × 24 小时，月视图为按周对齐的 30 天格子。
+struct HeatmapGrid: View {
+    let history: UsageHistory
+    let range: ChartRange
+    let series: ChartSeries
+
+    private static let weekdayNames = ["一", "二", "三", "四", "五", "六", "日"]
+
+    var body: some View {
+        switch range {
+        case .week: weekGrid
+        case .month: monthGrid
+        }
+    }
+
+    // MARK: 周视图（7 天 × 12 个 2 小时段）
+
+    /// 周视图把 24 小时合成 12 个 2 小时段 —— 格子更大、能方正铺满面板。
+    private static let weekBlocks = 12
+
+    private var weekGrid: some View {
+        GeometryReader { geo in
+            let gap: CGFloat = 3
+            let labelW: CGFloat = 24
+            let axisH: CGFloat = 12
+            let rows = min(7, history.dayCount)
+            let cols = Self.weekBlocks
+            let maxValue = normMax
+            // 边长取「铺满高度」与「铺满宽度」里较小者，格子保持正方形且尽量填满。
+            let fillW = (geo.size.width - labelW - gap * CGFloat(cols - 1)) / CGFloat(cols)
+            let fillH = (geo.size.height - axisH - gap * CGFloat(rows - 1)) / CGFloat(max(rows, 1))
+            let side = max(3, min(fillW, fillH))
+            VStack(spacing: gap) {
+                ForEach(0 ..< rows, id: \.self) { row in
+                    let day = history.dayCount - rows + row
+                    HStack(spacing: gap) {
+                        Text(weekDayLabel(day))
+                            .font(.system(size: 8.5))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .frame(width: labelW, alignment: .leading)
+                        ForEach(0 ..< cols, id: \.self) { block in
+                            let usage = weekBlock(day: day, block: block)
+                            cell(claude: usage.claude, codex: usage.codex,
+                                 normMax: maxValue, side: side)
+                                .help(weekTooltip(day: day, block: block,
+                                                  claude: usage.claude, codex: usage.codex))
+                        }
+                    }
+                }
+                blockAxis(labelW: labelW, side: side, gap: gap)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+    }
+
+    /// 第 block 个 2 小时段（[block*2, block*2+2) 时）的 Claude / Codex 用量。
+    private func weekBlock(day: Int, block: Int) -> (claude: Int, codex: Int) {
+        let hour = block * 2
+        let first = history.bucket(day: day, hour: hour)
+        let second = history.bucket(day: day, hour: hour + 1)
+        return ((first?.claudeTokens ?? 0) + (second?.claudeTokens ?? 0),
+                (first?.codexTokens ?? 0) + (second?.codexTokens ?? 0))
+    }
+
+    private func blockAxis(labelW: CGFloat, side: CGFloat, gap: CGFloat) -> some View {
         HStack(spacing: gap) {
-            Color.clear.frame(width: labelWidth, height: 1)
-            ForEach(0 ..< 24, id: \.self) { hour in
+            Color.clear.frame(width: labelW, height: 1)
+            ForEach(0 ..< Self.weekBlocks, id: \.self) { block in
                 Group {
-                    if hour % 6 == 0 {
-                        Text("\(hour)")
+                    if (block * 2) % 6 == 0 {
+                        Text("\(block * 2)")
                             .font(.system(size: 7.5))
-                            .foregroundStyle(.white.opacity(0.3))
+                            .foregroundStyle(.white.opacity(0.32))
                     } else {
                         Color.clear
                     }
                 }
-                .frame(width: cell)
+                .frame(width: side)
             }
         }
+        .frame(height: 9)
     }
 
-    private func heatColor(_ total: Int) -> Color {
-        guard total > 0, history.maxHourTotal > 0 else {
-            return Color.white.opacity(0.05)
+    // MARK: 月视图（GitHub 贡献图样式，按周对齐的近三个月）
+
+    /// 月视图展示的周数（列数）—— 13 周 ≈ 近三个月，正好铺满主面板宽度。
+    private static let monthColumns = 13
+
+    private var monthGrid: some View {
+        GeometryReader { geo in
+            let gap: CGFloat = 3
+            let labelW: CGFloat = 18
+            let rows = 7
+            let cols = Self.monthColumns
+            let maxValue = normMax
+            // 边长取「铺满高度」与「铺满宽度」里较小者，格子保持正方形。
+            let fillH = (geo.size.height - gap * CGFloat(rows - 1)) / CGFloat(rows)
+            let fillW = (geo.size.width - labelW - gap * CGFloat(cols - 1)) / CGFloat(cols)
+            let side = max(3, min(fillH, fillW))
+            // 最右一列是本周；今天所在的星期决定本周已过的格子。
+            let todayIndex = history.dayCount - 1
+            let todayWeekday = mondayIndex(history.dayStart(todayIndex))
+            VStack(spacing: gap) {
+                ForEach(0 ..< rows, id: \.self) { row in
+                    HStack(spacing: gap) {
+                        Text(Self.weekdayNames[row])
+                            .font(.system(size: 8))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .frame(width: labelW, alignment: .leading)
+                        ForEach(0 ..< cols, id: \.self) { col in
+                            let weeksAgo = cols - 1 - col
+                            monthCell(dayIndex: todayIndex - todayWeekday - weeksAgo * 7 + row,
+                                      side: side, normMax: maxValue)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        let intensity = log(Double(total) + 1) / log(Double(history.maxHourTotal) + 1)
-        return Color(
-            hue: 0.46,
-            saturation: 0.32 + 0.52 * intensity,
-            brightness: 0.34 + 0.60 * intensity)
     }
 
-    private func dayLabel(_ day: Int) -> String {
+    @ViewBuilder
+    private func monthCell(dayIndex: Int, side: CGFloat, normMax: Int) -> some View {
+        if dayIndex >= 0, dayIndex < history.dayCount {
+            let claude = history.dayClaude(dayIndex)
+            let codex = history.dayCodex(dayIndex)
+            cell(claude: claude, codex: codex, normMax: normMax, side: side)
+                .help(monthTooltip(dayIndex: dayIndex, claude: claude, codex: codex))
+        } else {
+            Color.clear.frame(width: side, height: side)
+        }
+    }
+
+    /// 一个正方形热力格，圆角随边长成比例。
+    private func cell(claude: Int, codex: Int, normMax: Int, side: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: max(1.5, side * 0.22), style: .continuous)
+            .fill(cellColor(claude: claude, codex: codex, normMax: normMax))
+            .frame(width: side, height: side)
+    }
+
+    // MARK: 着色
+
+    /// 当前序列下某格的取值。
+    private func value(claude: Int, codex: Int) -> Int {
+        switch series {
+        case .both: return claude + codex
+        case .claude: return claude
+        case .codex: return codex
+        }
+    }
+
+    /// 当前视图里的最大单格取值，用于明暗归一化。
+    private var normMax: Int {
+        var maxValue = 0
+        switch range {
+        case .week:
+            let rows = min(7, history.dayCount)
+            for row in 0 ..< rows {
+                let day = history.dayCount - rows + row
+                for block in 0 ..< Self.weekBlocks {
+                    let usage = weekBlock(day: day, block: block)
+                    maxValue = max(maxValue, value(claude: usage.claude, codex: usage.codex))
+                }
+            }
+        case .month:
+            for day in 0 ..< history.dayCount {
+                maxValue = max(maxValue, value(claude: history.dayClaude(day),
+                                               codex: history.dayCodex(day)))
+            }
+        }
+        return maxValue
+    }
+
+    private func cellColor(claude: Int, codex: Int, normMax: Int) -> Color {
+        let amount = value(claude: claude, codex: codex)
+        // 空格子用淡白描出网格底，有用量的格子从供应商主色由浅入深。
+        guard amount > 0, normMax > 0 else { return Color.white.opacity(0.07) }
+        let intensity = log(Double(amount) + 1) / log(Double(normMax) + 1)
+        let base: Color
+        switch series {
+        case .claude: base = claudeAccent
+        case .codex: base = codexAccent
+        case .both:
+            let total = claude + codex
+            base = blendAccent(claudeRatio: total > 0 ? Double(claude) / Double(total) : 0.5)
+        }
+        return base.opacity(0.32 + 0.68 * intensity)
+    }
+
+    // MARK: 标签与提示
+
+    /// 周一为 0、周日为 6 的星期序号。
+    private func mondayIndex(_ date: Date?) -> Int {
+        guard let date else { return 0 }
+        let weekday = Calendar.current.component(.weekday, from: date) // 1=周日…7=周六
+        return (weekday + 5) % 7
+    }
+
+    private func weekDayLabel(_ day: Int) -> String {
         guard let date = history.dayStart(day) else { return "" }
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "今天" }
@@ -386,13 +701,24 @@ struct HeatmapView: View {
         return formatter.string(from: date)
     }
 
-    private func tooltip(_ bucket: HourBucket?, day: Int, hour: Int) -> String {
-        let label = dayLabel(day)
-        let clock = String(format: "%02d:00", hour)
-        guard let bucket, bucket.total > 0 else {
-            return "\(label) \(clock) · 无用量"
+    private func weekTooltip(day: Int, block: Int, claude: Int, codex: Int) -> String {
+        let label = weekDayLabel(day)
+        let span = String(format: "%02d–%02d 时", block * 2, block * 2 + 2)
+        guard claude + codex > 0 else { return "\(label) \(span) · 无用量" }
+        return "\(label) \(span) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
+    }
+
+    private func monthTooltip(dayIndex: Int, claude: Int, codex: Int) -> String {
+        let dateText: String
+        if let date = history.dayStart(dayIndex) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "zh_CN")
+            formatter.dateFormat = "M月d日"
+            dateText = formatter.string(from: date)
+        } else {
+            dateText = ""
         }
-        return "\(label) \(clock) · Claude \(shortTokens(bucket.claudeTokens))"
-            + " / Codex \(shortTokens(bucket.codexTokens))"
+        guard claude + codex > 0 else { return "\(dateText) · 无用量" }
+        return "\(dateText) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
     }
 }

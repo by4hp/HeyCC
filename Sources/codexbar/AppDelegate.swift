@@ -45,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in await self?.refreshQuip() }
         }
 
+        // 在图表顶部切换周/月 → 写回配置，下次启动记住。
+        model.onChartRangeChanged = { [weak self] range in
+            self?.persistChartRange(range)
+        }
+
         notchController = NotchController(model: model)
         notchController?.start()
 
@@ -164,16 +169,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         // 从热力图聚合更多上下文：本周累计、今日累计、最活跃钟点。
+        // 仅统计最近 7 天 —— 文案上下文描述的是「最近 7 天」，别让一两个月前的高峰污染。
         let history = model.history
-        let weekTotal = history.buckets.reduce(0) { $0 + $1.total }
-        let todayTotal = (0 ..< 24).reduce(0) { sum, hour in
-            sum + (history.bucket(day: 6, hour: hour)?.total ?? 0)
-        }
+        let weekTotal = history.lastWeekTotal
+        let todayTotal = history.todayTotal
         var hourTotals = [Int](repeating: 0, count: 24)
         let calendar = Calendar.current
-        for bucket in history.buckets {
-            let hour = calendar.component(.hour, from: bucket.hourStart)
-            hourTotals[hour] += bucket.total
+        for day in max(0, history.dayCount - 7) ..< history.dayCount {
+            for hour in 0 ..< 24 {
+                guard let bucket = history.bucket(day: day, hour: hour) else { continue }
+                let clockHour = calendar.component(.hour, from: bucket.hourStart)
+                hourTotals[clockHour] += bucket.total
+            }
         }
         let busiest = hourTotals.enumerated().max { $0.element < $1.element }
         let busiestHour = (busiest?.element ?? 0) > 0 ? busiest?.offset : nil
@@ -404,11 +411,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - 配置
 
-    /// 把配置里的续费日等设置应用到面板模型。
+    /// 把配置里的续费日、图表偏好等设置应用到面板模型。
     private func applyConfig(_ config: CodexBarConfig) {
         model.claudeRenewalDay = config.claudeRenewalDay
         model.codexRenewalDay = config.codexRenewalDay
         model.userName = config.userName
+        model.chartProviderMode = config.chartProviderMode
+        model.chartRange = config.chartRange
+    }
+
+    /// 仅把图表时间范围写回配置文件（其余字段保持不变）。
+    private func persistChartRange(_ range: ChartRange) {
+        var config = CodexBarConfig.load()
+        guard config.chartRange != range else { return }
+        config.chartRange = range
+        try? config.save()
     }
 
     /// 设置保存后：应用新值并立即刷新一次俏皮总结。

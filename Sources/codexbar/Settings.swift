@@ -80,6 +80,8 @@ struct SettingsView: View {
     @State private var userName: String
     @State private var showClaudeCalendar = false
     @State private var showCodexCalendar = false
+    @State private var chartMode: ChartProviderMode
+    @State private var chartRange: ChartRange
 
     private let claudePlan: String?
     private let codexPlan: String?
@@ -89,6 +91,7 @@ struct SettingsView: View {
     private let claudeTint = Color(red: 0.85, green: 0.49, blue: 0.30)
     private let codexTint = Color(red: 0.26, green: 0.72, blue: 0.66)
     private let deepseekTint = Color(red: 0.55, green: 0.50, blue: 0.95)
+    private let chartTint = Color(red: 0.40, green: 0.52, blue: 0.92)
 
     init(config: CodexBarConfig,
          claudePlan: String?,
@@ -99,6 +102,8 @@ struct SettingsView: View {
         _codexDay = State(initialValue: config.codexRenewalDay)
         _deepseekKey = State(initialValue: config.deepseekAPIKey)
         _userName = State(initialValue: config.userName)
+        _chartMode = State(initialValue: config.chartProviderMode)
+        _chartRange = State(initialValue: config.chartRange)
         self.claudePlan = claudePlan
         self.codexPlan = codexPlan
         self.onSave = onSave
@@ -110,6 +115,7 @@ struct SettingsView: View {
             header
             planSection
             renewalSection
+            chartSection
             quipSection
             footer
         }
@@ -189,6 +195,30 @@ struct SettingsView: View {
         }
     }
 
+    private var chartSection: some View {
+        section("悬浮窗图表",
+                footnote: "刘海下那张用量图表的样式；时间范围也可在图表顶部直接切换。") {
+            row(icon: "chart.bar.xaxis", tint: chartTint, title: "Claude / Codex 区分") {
+                Picker("", selection: $chartMode) {
+                    ForEach(ChartProviderMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 108)
+            }
+            rowDivider
+            row(icon: "calendar", tint: chartTint, title: "默认时间范围") {
+                Picker("", selection: $chartRange) {
+                    Text("最近 7 天").tag(ChartRange.week)
+                    Text("最近三个月").tag(ChartRange.month)
+                }
+                .labelsHidden()
+                .frame(width: 108)
+            }
+        }
+    }
+
     private var quipSection: some View {
         section("俏皮总结",
                 footnote: "刘海面板底部那句俏皮话由 deepseek-v4-flash 生成，留空 API Key 即关闭。") {
@@ -220,7 +250,9 @@ struct SettingsView: View {
                     deepseekAPIKey: deepseekKey.trimmingCharacters(in: .whitespacesAndNewlines),
                     claudeRenewalDay: claudeDay,
                     codexRenewalDay: codexDay,
-                    userName: userName.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    userName: userName.trimmingCharacters(in: .whitespacesAndNewlines),
+                    chartProviderMode: chartMode,
+                    chartRange: chartRange))
                 onClose()
             }
             .controlSize(.large)

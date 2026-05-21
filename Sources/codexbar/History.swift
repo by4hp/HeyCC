@@ -11,13 +11,16 @@ struct HourBucket: Sendable {
     var total: Int { claudeTokens + codexTokens }
 }
 
-/// 最近 7 个自然日 × 24 小时的用量历史。
-/// buckets 以「天为主序」排列：index = day * 24 + hour，day 0 为 6 天前，day 6 为今天。
+/// 最近 N 个自然日 × 24 小时的用量历史。
+/// buckets 以「天为主序」排列：index = day * 24 + hour，day 0 为最早一天，day dayCount-1 为今天。
 struct UsageHistory: Sendable {
     var buckets: [HourBucket]
+    /// 覆盖的自然天数（buckets.count / 24）。
+    var dayCount: Int
+    /// 单个自然小时内的最大合计 token —— 判空与日志用。
     var maxHourTotal: Int
 
-    static let empty = UsageHistory(buckets: [], maxHourTotal: 0)
+    static let empty = UsageHistory(buckets: [], dayCount: 0, maxHourTotal: 0)
 
     var hasData: Bool { maxHourTotal > 0 }
 
@@ -30,7 +33,32 @@ struct UsageHistory: Sendable {
     func dayStart(_ day: Int) -> Date? {
         bucket(day: day, hour: 0)?.hourStart
     }
+
+    /// 某一天的 Claude token 合计。
+    func dayClaude(_ day: Int) -> Int {
+        (0 ..< 24).reduce(0) { $0 + (bucket(day: day, hour: $1)?.claudeTokens ?? 0) }
+    }
+
+    /// 某一天的 Codex token 合计。
+    func dayCodex(_ day: Int) -> Int {
+        (0 ..< 24).reduce(0) { $0 + (bucket(day: day, hour: $1)?.codexTokens ?? 0) }
+    }
+
+    /// 某一天的合计 token。
+    func dayTotal(_ day: Int) -> Int { dayClaude(day) + dayCodex(day) }
+
+    /// 今天累计 token。
+    var todayTotal: Int { dayCount > 0 ? dayTotal(dayCount - 1) : 0 }
+
+    /// 最近 7 天累计 token。
+    var lastWeekTotal: Int {
+        guard dayCount > 0 else { return 0 }
+        return (max(0, dayCount - 7) ..< dayCount).reduce(0) { $0 + dayTotal($1) }
+    }
 }
+
+/// 历史回看天数：周视图取末 7 天，月视图取近 13 周（98 天含一周缓冲）。
+let historyDayCount = 98
 
 // MARK: - 扫描本地会话日志
 
@@ -39,15 +67,17 @@ struct UsageHistory: Sendable {
 func scanUsageHistory() -> UsageHistory {
     let calendar = Calendar.current
     let startOfToday = calendar.startOfDay(for: Date())
-    guard let firstDay = calendar.date(byAdding: .day, value: -6, to: startOfToday) else {
+    guard let firstDay = calendar.date(
+        byAdding: .day, value: -(historyDayCount - 1), to: startOfToday)
+    else {
         return .empty
     }
 
-    // 生成 168 个连续的本地整点桶
+    // 生成 historyDayCount * 24 个连续的本地整点桶
     var order: [Date] = []
     var claudeByHour: [Date: Int] = [:]
     var codexByHour: [Date: Int] = [:]
-    for dayOffset in 0 ..< 7 {
+    for dayOffset in 0 ..< historyDayCount {
         guard let dayStart = calendar.date(byAdding: .day, value: dayOffset, to: firstDay) else { continue }
         for hour in 0 ..< 24 {
             guard let slot = calendar.date(byAdding: .hour, value: hour, to: dayStart) else { continue }
@@ -131,7 +161,7 @@ func scanUsageHistory() -> UsageHistory {
         buckets.append(HourBucket(hourStart: slot, claudeTokens: claude, codexTokens: codex))
         maxTotal = max(maxTotal, claude + codex)
     }
-    return UsageHistory(buckets: buckets, maxHourTotal: maxTotal)
+    return UsageHistory(buckets: buckets, dayCount: historyDayCount, maxHourTotal: maxTotal)
 }
 
 // MARK: - 辅助
