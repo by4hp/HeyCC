@@ -8,6 +8,9 @@ final class PanelModel: ObservableObject {
     @Published var codex = ProviderState.initial(name: "Codex", prefix: "Cx")
     @Published var history = UsageHistory.empty
     @Published var lastUpdated: Date?
+    /// 每月续费日，来自配置，可在「设置」里改。
+    @Published var claudeRenewalDay = 3
+    @Published var codexRenewalDay = 19
     /// DeepSeek 生成的俏皮总结；尚未生成时为 nil。
     @Published var quip: String?
     /// 文案生成失败时的错误描述。
@@ -15,6 +18,10 @@ final class PanelModel: ObservableObject {
     /// 正在调用 DeepSeek 生成文案。
     @Published var quipLoading = false
     @Published var expanded = false
+    /// 戳一下宠物时触发（由 AppDelegate 注入：刷新俏皮总结）。
+    var onPokePet: (() -> Void)?
+    /// 用户希望被称呼的名字（喂给俏皮总结），来自配置。
+    var userName = ""
     /// 当前屏幕刘海尺寸，面板顶部用它在刘海两侧排版。
     @Published var notchHeight: CGFloat = 38
     @Published var notchWidth: CGFloat = 220
@@ -25,7 +32,7 @@ final class PanelModel: ObservableObject {
 enum NotchMetrics {
     static let panelWidth: CGFloat = 392
     /// 刘海下方的内容区高度（窗口总高 = 刘海高度 + 此值）。
-    static let contentHeight: CGFloat = 346
+    static let contentHeight: CGFloat = 392
     static let cornerRadius: CGFloat = 24
 }
 
@@ -59,8 +66,14 @@ struct NotchPanelView: View {
         VStack(spacing: 0) {
             notchBar
             VStack(alignment: .leading, spacing: 10) {
-                ProviderRow(state: model.claude, subscription: claudeSubscription, accent: claudeAccent)
-                ProviderRow(state: model.codex, subscription: codexSubscription, accent: codexAccent)
+                ProviderRow(
+                    state: model.claude,
+                    subscription: Subscription(renewalDay: model.claudeRenewalDay),
+                    accent: claudeAccent)
+                ProviderRow(
+                    state: model.codex,
+                    subscription: Subscription(renewalDay: model.codexRenewalDay),
+                    accent: codexAccent)
                 Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
                 HeatmapView(history: model.history)
                 Spacer(minLength: 0)
@@ -103,16 +116,13 @@ struct NotchPanelView: View {
 
 // MARK: - 底部俏皮总结
 
-/// 刘海面板底部：DeepSeek 生成的俏皮总结。
-/// 动效：新文案逐字浮现（打字机），✨ 随之转一圈；生成中时 ✨ 与文字呼吸闪动。
+/// 刘海面板底部：像素宠物 + DeepSeek 俏皮总结。
+/// 宠物会浮动眨眼，文案以打字机逐字浮现，像宠物在对话气泡里说话。
 struct QuipFooter: View {
     @ObservedObject var model: PanelModel
 
     @State private var displayed = ""
     @State private var shown = ""
-    @State private var sparkleAngle: Double = 0
-
-    private let sparkleColor = Color(red: 1, green: 0.82, blue: 0.42)
 
     private enum Mode { case loading, quip, error }
     private var mode: Mode {
@@ -123,44 +133,53 @@ struct QuipFooter: View {
     }
 
     var body: some View {
-        content
-            .task(id: typeKey) { await typewriter() }
+        HStack(alignment: .center, spacing: 7) {
+            PixelPet(pixel: 2.5, mood: petMood, onPoke: { model.onPokePet?() })
+            bubble
+        }
+        .task(id: typeKey) { await typewriter() }
     }
 
-    @ViewBuilder private var content: some View {
+    /// 任一供应商 5 小时额度用到 85% 以上，小精灵就发愁。
+    private var petMood: PetMood {
+        let claude = model.claude.fiveHour?.percent ?? 0
+        let codex = model.codex.fiveHour?.percent ?? 0
+        return max(claude, codex) >= 85 ? .worried : .idle
+    }
+
+    /// 宠物的对话气泡，按状态切换文字。
+    @ViewBuilder private var bubble: some View {
         switch mode {
         case .loading:
-            // 生成中：✨ 与文字按正弦呼吸。
+            // 生成中：文字按正弦呼吸。
             TimelineView(.animation) { context in
-                let phase = context.date.timeIntervalSinceReferenceDate * 2.6
-                let wave = 0.5 + 0.5 * sin(phase)
-                row(sparkleScale: 1 + 0.18 * wave,
-                    text: "正在生成俏皮总结…",
-                    textOpacity: 0.30 + 0.26 * wave)
+                let wave = 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * 2.6)
+                speechBubble("正在想一句俏皮话…", opacity: 0.32 + 0.26 * wave)
             }
         case .quip:
-            row(sparkleScale: 1, text: displayed, textOpacity: 0.64)
+            speechBubble(displayed, opacity: 0.74)
         case .error:
-            row(sparkleScale: 1, text: model.quipError ?? "", textOpacity: 0.34)
+            speechBubble(model.quipError ?? "", opacity: 0.42)
         }
     }
 
-    private func row(sparkleScale: CGFloat, text: String, textOpacity: Double) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 9))
-                .foregroundStyle(sparkleColor)
-                .scaleEffect(sparkleScale)
-                .rotationEffect(.degrees(sparkleAngle))
-                .padding(.top, 1.5)
-            Text(text.isEmpty ? " " : text)
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(textOpacity))
-                .lineSpacing(2)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    /// 半透明圆角对话气泡。
+    private func speechBubble(_ text: String, opacity: Double) -> some View {
+        Text(text.isEmpty ? " " : text)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(.white.opacity(opacity))
+            .lineSpacing(3)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)))
     }
 
     /// task 的触发键：生成中用固定值，出文案后变成文案本身，从而重新触发打字机。
@@ -168,7 +187,7 @@ struct QuipFooter: View {
         model.quipLoading ? "\u{1}loading" : (model.quip ?? "\u{1}none")
     }
 
-    /// 逐字浮现新文案，并让 ✨ 转一圈。
+    /// 逐字浮现新文案。
     private func typewriter() async {
         guard !model.quipLoading else {
             shown = ""
@@ -180,9 +199,6 @@ struct QuipFooter: View {
             return
         }
         shown = quip
-        withAnimation(.spring(response: 0.7, dampingFraction: 0.55)) {
-            sparkleAngle += 360
-        }
         displayed = ""
         for character in quip {
             if Task.isCancelled { return }
@@ -211,12 +227,14 @@ struct ProviderRow: View {
                     Text(state.name)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text(subscription.plan)
-                        .font(.system(size: 8.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.62))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1.5)
-                        .background(Capsule().fill(Color.white.opacity(0.1)))
+                    if let plan = state.plan, !plan.isEmpty {
+                        Text(plan.capitalized)
+                            .font(.system(size: 8.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Capsule().fill(Color.white.opacity(0.1)))
+                    }
                     Spacer()
                     Text("7 天")
                         .font(.system(size: 8.5, weight: .medium))

@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let model = PanelModel()
     private var notchController: NotchController?
+    private var settingsController: SettingsController?
 
     private var isRefreshing = false
     private var isQuipRefreshing = false
@@ -35,8 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateUI()
 
-        // 首次运行写出 DeepSeek 配置模板，方便填 Key。
+        // 首次运行写出配置模板，并把续费日等设置读进来。
         CodexBarConfig.createTemplateIfMissing()
+        applyConfig(CodexBarConfig.load())
+
+        // 戳宠物 → 刷新俏皮总结。
+        model.onPokePet = { [weak self] in
+            Task { @MainActor in await self?.refreshQuip() }
+        }
 
         notchController = NotchController(model: model)
         notchController?.start()
@@ -78,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let usage = try await claudeResult
                 model.claude = ProviderState(
-                    name: "Claude Code", prefix: "Cl", plan: nil,
+                    name: "Claude Code", prefix: "Cl", plan: usage.plan,
                     fiveHour: usage.fiveHour, weekly: usage.weekly,
                     error: nil, isLoading: false)
             } catch {
@@ -145,17 +152,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 把当前用量状态打包成喂给 DeepSeek 的快照。
     private func currentSnapshot() -> UsageSnapshot {
-        func snap(_ state: ProviderState) -> ProviderSnapshot {
+        func snap(_ state: ProviderState, renewalDay: Int) -> ProviderSnapshot {
             ProviderSnapshot(
+                plan: state.plan,
+                renewalDay: renewalDay,
                 fiveHourPercent: state.fiveHour?.percent,
+                fiveHourResetAt: state.fiveHour?.resetAt,
                 weeklyPercent: state.weekly?.percent,
                 weeklyResetAt: state.weekly?.resetAt,
                 error: state.isLoading ? nil : state.error)
         }
+
+        // 从热力图聚合更多上下文：本周累计、今日累计、最活跃钟点。
+        let history = model.history
+        let weekTotal = history.buckets.reduce(0) { $0 + $1.total }
+        let todayTotal = (0 ..< 24).reduce(0) { sum, hour in
+            sum + (history.bucket(day: 6, hour: hour)?.total ?? 0)
+        }
+        var hourTotals = [Int](repeating: 0, count: 24)
+        let calendar = Calendar.current
+        for bucket in history.buckets {
+            let hour = calendar.component(.hour, from: bucket.hourStart)
+            hourTotals[hour] += bucket.total
+        }
+        let busiest = hourTotals.enumerated().max { $0.element < $1.element }
+        let busiestHour = (busiest?.element ?? 0) > 0 ? busiest?.offset : nil
+
         return UsageSnapshot(
-            claude: snap(model.claude),
-            codex: snap(model.codex),
-            peakHourTotal: model.history.maxHourTotal,
+            claude: snap(model.claude, renewalDay: model.claudeRenewalDay),
+            codex: snap(model.codex, renewalDay: model.codexRenewalDay),
+            peakHourTotal: history.maxHourTotal,
+            weekTokenTotal: weekTotal,
+            todayTokenTotal: todayTotal,
+            busiestHour: busiestHour,
+            userName: model.userName,
             generatedAt: Date())
     }
 
@@ -198,7 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             color = .secondaryLabelColor
         } else if let percent = state.fiveHour?.percent {
             value = "\(Int(percent.rounded()))%"
-            color = usageColor(percent)
+            // 菜单栏默认黑色（随明暗自适应），仅在剩余 ≤10% 时转红示警。
+            color = percent >= 90 ? .systemRed : .labelColor
         } else if state.error != nil {
             value = "⚠"
             color = .systemRed
@@ -237,6 +268,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             title: "立即刷新", action: #selector(refreshClicked), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
+
+        let settingsItem = NSMenuItem(
+            title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         let quitItem = NSMenuItem(
             title: "退出 CodexBar", action: #selector(quitClicked), keyEquivalent: "q")
@@ -323,11 +359,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func logStatus() {
         func describe(_ state: ProviderState) -> String {
-            if let error = state.error { return "\(state.prefix)=错误(\(error))" }
+            let plan = state.plan.map { "[\($0)]" } ?? ""
+            if let error = state.error { return "\(state.prefix)\(plan)=错误(\(error))" }
             if let percent = state.fiveHour?.percent {
-                return "\(state.prefix) 5h=\(Int(percent.rounded()))%"
+                return "\(state.prefix)\(plan) 5h=\(Int(percent.rounded()))%"
             }
-            return "\(state.prefix)=无数据"
+            return "\(state.prefix)\(plan)=无数据"
         }
         let history = model.history
         let historyText = history.hasData
@@ -348,8 +385,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func openSettings() {
+        if settingsController == nil {
+            settingsController = SettingsController()
+        }
+        settingsController?.show(
+            config: CodexBarConfig.load(),
+            claudePlan: model.claude.plan,
+            codexPlan: model.codex.plan,
+            onSave: { [weak self] config in
+                self?.handleSettingsSaved(config)
+            })
+    }
+
     @objc private func quitClicked() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - 配置
+
+    /// 把配置里的续费日等设置应用到面板模型。
+    private func applyConfig(_ config: CodexBarConfig) {
+        model.claudeRenewalDay = config.claudeRenewalDay
+        model.codexRenewalDay = config.codexRenewalDay
+        model.userName = config.userName
+    }
+
+    /// 设置保存后：应用新值并立即刷新一次俏皮总结。
+    private func handleSettingsSaved(_ config: CodexBarConfig) {
+        applyConfig(config)
+        updateUI()
+        Task { @MainActor in await refreshQuip() }
     }
 
     // MARK: - NSMenuDelegate

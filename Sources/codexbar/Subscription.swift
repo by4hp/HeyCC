@@ -1,8 +1,9 @@
 import Foundation
 
-/// 订阅套餐与每月续费日。
+/// 每月续费日的日期计算。
+/// 续费日来自配置（可在设置里改）；套餐名不在这里 —— 由接口/凭证自动识别。
 struct Subscription: Sendable {
-    let plan: String
+    /// 每月几号续费，1...31。
     let renewalDay: Int
 
     /// 下一次续费日期（含今天）。
@@ -32,6 +33,3 @@ struct Subscription: Sendable {
         return "续费 \(dateString) · \(days) 天后"
     }
 }
-
-let claudeSubscription = Subscription(plan: "5× Max", renewalDay: 3)
-let codexSubscription = Subscription(plan: "Plus", renewalDay: 19)

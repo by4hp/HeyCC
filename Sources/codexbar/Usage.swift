@@ -8,6 +8,7 @@ struct UsageWindow: Sendable {
 }
 
 struct ClaudeUsage: Sendable {
+    var plan: String?
     var fiveHour: UsageWindow?
     var weekly: UsageWindow?
 }
@@ -59,15 +60,21 @@ private func loadCodexCreds() throws -> CodexCreds {
     return CodexCreds(accessToken: token, accountId: tokens["account_id"] as? String)
 }
 
-private func loadClaudeToken() throws -> String {
+private struct ClaudeCreds {
+    let accessToken: String
+    /// 已格式化好的套餐名（如 "Max 5×"），读不到时为 nil。
+    let plan: String?
+}
+
+private func loadClaudeCreds() throws -> ClaudeCreds {
     // 优先读 macOS 钥匙串（Claude Code 默认存这里）
-    if let data = readClaudeKeychain(), let token = parseClaudeToken(data) {
-        return token
+    if let data = readClaudeKeychain(), let creds = parseClaudeCreds(data) {
+        return creds
     }
     // 回退到凭证文件
     let url = homeURL().appendingPathComponent(".claude/.credentials.json")
-    if let data = try? Data(contentsOf: url), let token = parseClaudeToken(data) {
-        return token
+    if let data = try? Data(contentsOf: url), let creds = parseClaudeCreds(data) {
+        return creds
     }
     throw UsageError.notLoggedIn("未找到 Claude 凭证，请先在终端运行 claude 登录")
 }
@@ -95,19 +102,39 @@ private func readClaudeKeychain() -> Data? {
     return Data(text.utf8)
 }
 
-private func parseClaudeToken(_ data: Data) -> String? {
+private func parseClaudeCreds(_ data: Data) -> ClaudeCreds? {
     guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return nil
     }
+    // 钥匙串结构：{ "claudeAiOauth": { accessToken, subscriptionType, rateLimitTier, … } }
     if let oauth = root["claudeAiOauth"] as? [String: Any],
        let token = oauth["accessToken"] as? String, !token.isEmpty
     {
-        return token
+        return ClaudeCreds(accessToken: token, plan: formatClaudePlan(
+            subscriptionType: oauth["subscriptionType"] as? String,
+            rateLimitTier: oauth["rateLimitTier"] as? String))
     }
     if let token = root["accessToken"] as? String, !token.isEmpty {
-        return token
+        return ClaudeCreds(accessToken: token, plan: formatClaudePlan(
+            subscriptionType: root["subscriptionType"] as? String,
+            rateLimitTier: root["rateLimitTier"] as? String))
     }
     return nil
+}
+
+/// 把 subscriptionType / rateLimitTier 拼成展示用套餐名。
+/// 例：subscriptionType="max" + rateLimitTier="default_claude_max_5x" → "Max 5×"。
+private func formatClaudePlan(subscriptionType: String?, rateLimitTier: String?) -> String? {
+    guard let raw = subscriptionType?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
+        return nil
+    }
+    let name = raw.replacingOccurrences(of: "_", with: " ").capitalized
+    if let tier = rateLimitTier,
+       let range = tier.range(of: #"\d+x"#, options: .regularExpression)
+    {
+        return "\(name) \(tier[range].dropLast())×"
+    }
+    return name
 }
 
 // MARK: - 接口响应
@@ -184,11 +211,11 @@ func fetchCodexUsage() async throws -> CodexUsage {
 }
 
 func fetchClaudeUsage() async throws -> ClaudeUsage {
-    let token = try loadClaudeToken()
+    let creds = try loadClaudeCreds()
     var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
     request.httpMethod = "GET"
     request.timeoutInterval = 25
-    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.setValue("Bearer \(creds.accessToken)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -210,5 +237,8 @@ func fetchClaudeUsage() async throws -> ClaudeUsage {
         guard let window else { return nil }
         return UsageWindow(percent: window.utilization ?? 0, resetAt: parseISODate(window.resets_at))
     }
-    return ClaudeUsage(fiveHour: toWindow(decoded.five_hour), weekly: toWindow(decoded.seven_day))
+    return ClaudeUsage(
+        plan: creds.plan,
+        fiveHour: toWindow(decoded.five_hour),
+        weekly: toWindow(decoded.seven_day))
 }

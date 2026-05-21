@@ -22,7 +22,11 @@ final class NotchController {
         guard let screen = Self.screenWithNotch() else { return false }
         notchScreen = screen
         buildWindow(on: screen)
-        startMousePolling()
+        if ProcessInfo.processInfo.environment["CODEXBAR_DEBUG_EXPAND"] != nil {
+            setExpanded(true) // 调试：强制展开面板，便于截图
+        } else {
+            startMousePolling()
+        }
         observeScreenChanges()
         return true
     }
@@ -81,7 +85,7 @@ final class NotchController {
         window.ignoresMouseEvents = true
         window.acceptsMouseMovedEvents = true
 
-        let hosting = NSHostingView(rootView: NotchPanelView(model: model))
+        let hosting = FirstMouseHostingView(rootView: NotchPanelView(model: model))
         hosting.frame = NSRect(origin: .zero, size: frame.size)
         hosting.autoresizingMask = [.width, .height]
         window.contentView = hosting
@@ -161,4 +165,9 @@ final class NotchController {
             buildWindow(on: screen)
         }
     }
+}
+
+/// 让面板在窗口非 key 状态下也能接收首次点击 —— 否则戳不动宠物。
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
