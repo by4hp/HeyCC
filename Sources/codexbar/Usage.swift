@@ -1,0 +1,214 @@
+import Foundation
+
+// MARK: - 模型
+
+struct UsageWindow: Sendable {
+    var percent: Double
+    var resetAt: Date?
+}
+
+struct ClaudeUsage: Sendable {
+    var fiveHour: UsageWindow?
+    var weekly: UsageWindow?
+}
+
+struct CodexUsage: Sendable {
+    var plan: String?
+    var fiveHour: UsageWindow?
+    var weekly: UsageWindow?
+}
+
+enum UsageError: LocalizedError, Sendable {
+    case notLoggedIn(String)
+    case unauthorized(String)
+    case http(Int, String)
+    case badResponse(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .notLoggedIn(message): return message
+        case let .unauthorized(message): return message
+        case let .http(code, who): return "\(who) 请求失败（HTTP \(code)）"
+        case let .badResponse(message): return message
+        }
+    }
+}
+
+// MARK: - 凭证读取
+
+private func homeURL() -> URL {
+    FileManager.default.homeDirectoryForCurrentUser
+}
+
+private struct CodexCreds {
+    let accessToken: String
+    let accountId: String?
+}
+
+private func loadCodexCreds() throws -> CodexCreds {
+    let url = homeURL().appendingPathComponent(".codex/auth.json")
+    guard let data = try? Data(contentsOf: url) else {
+        throw UsageError.notLoggedIn("未找到 ~/.codex/auth.json，请先在终端运行 codex 登录")
+    }
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let tokens = root["tokens"] as? [String: Any],
+          let token = tokens["access_token"] as? String, !token.isEmpty
+    else {
+        throw UsageError.notLoggedIn("无法解析 Codex 凭证，请重新运行 codex 登录")
+    }
+    return CodexCreds(accessToken: token, accountId: tokens["account_id"] as? String)
+}
+
+private func loadClaudeToken() throws -> String {
+    // 优先读 macOS 钥匙串（Claude Code 默认存这里）
+    if let data = readClaudeKeychain(), let token = parseClaudeToken(data) {
+        return token
+    }
+    // 回退到凭证文件
+    let url = homeURL().appendingPathComponent(".claude/.credentials.json")
+    if let data = try? Data(contentsOf: url), let token = parseClaudeToken(data) {
+        return token
+    }
+    throw UsageError.notLoggedIn("未找到 Claude 凭证，请先在终端运行 claude 登录")
+}
+
+private func readClaudeKeychain() -> Data? {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+    proc.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+    let out = Pipe()
+    proc.standardOutput = out
+    proc.standardError = Pipe()
+    do {
+        try proc.run()
+    } catch {
+        return nil
+    }
+    proc.waitUntilExit()
+    guard proc.terminationStatus == 0 else { return nil }
+    let raw = out.fileHandleForReading.readDataToEndOfFile()
+    guard let text = String(data: raw, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
+    else {
+        return nil
+    }
+    return Data(text.utf8)
+}
+
+private func parseClaudeToken(_ data: Data) -> String? {
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return nil
+    }
+    if let oauth = root["claudeAiOauth"] as? [String: Any],
+       let token = oauth["accessToken"] as? String, !token.isEmpty
+    {
+        return token
+    }
+    if let token = root["accessToken"] as? String, !token.isEmpty {
+        return token
+    }
+    return nil
+}
+
+// MARK: - 接口响应
+
+private struct CodexResponse: Decodable {
+    struct Window: Decodable {
+        let used_percent: Double
+        let reset_at: Double?
+    }
+
+    struct RateLimit: Decodable {
+        let primary_window: Window?
+        let secondary_window: Window?
+    }
+
+    let plan_type: String?
+    let rate_limit: RateLimit?
+}
+
+private struct ClaudeResponse: Decodable {
+    struct Window: Decodable {
+        let utilization: Double?
+        let resets_at: String?
+    }
+
+    let five_hour: Window?
+    let seven_day: Window?
+}
+
+private func parseISODate(_ string: String?) -> Date? {
+    guard let string, !string.isEmpty else { return nil }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: string) { return date }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: string)
+}
+
+// MARK: - 拉取使用量
+
+func fetchCodexUsage() async throws -> CodexUsage {
+    let creds = try loadCodexCreds()
+    var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
+    request.httpMethod = "GET"
+    request.timeoutInterval = 25
+    request.setValue("Bearer \(creds.accessToken)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("CodexBar", forHTTPHeaderField: "User-Agent")
+    if let account = creds.accountId, !account.isEmpty {
+        request.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id")
+    }
+
+    let (data, response) = try await URLSession.shared.data(for: request)
+    guard let http = response as? HTTPURLResponse else {
+        throw UsageError.badResponse("Codex 返回异常响应")
+    }
+    if http.statusCode == 401 || http.statusCode == 403 {
+        throw UsageError.unauthorized("Codex 登录已过期，请重新运行 codex")
+    }
+    guard (200 ..< 300).contains(http.statusCode) else {
+        throw UsageError.http(http.statusCode, "Codex")
+    }
+
+    let decoded = try JSONDecoder().decode(CodexResponse.self, from: data)
+    func toWindow(_ window: CodexResponse.Window?) -> UsageWindow? {
+        guard let window else { return nil }
+        let reset = window.reset_at.map { Date(timeIntervalSince1970: $0) }
+        return UsageWindow(percent: window.used_percent, resetAt: reset)
+    }
+    return CodexUsage(
+        plan: decoded.plan_type,
+        fiveHour: toWindow(decoded.rate_limit?.primary_window),
+        weekly: toWindow(decoded.rate_limit?.secondary_window))
+}
+
+func fetchClaudeUsage() async throws -> ClaudeUsage {
+    let token = try loadClaudeToken()
+    var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+    request.httpMethod = "GET"
+    request.timeoutInterval = 25
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+    request.setValue("claude-code/2.1.0", forHTTPHeaderField: "User-Agent")
+
+    let (data, response) = try await URLSession.shared.data(for: request)
+    guard let http = response as? HTTPURLResponse else {
+        throw UsageError.badResponse("Claude 返回异常响应")
+    }
+    if http.statusCode == 401 {
+        throw UsageError.unauthorized("Claude 登录已过期，请重新运行 claude")
+    }
+    guard (200 ..< 300).contains(http.statusCode) else {
+        throw UsageError.http(http.statusCode, "Claude")
+    }
+
+    let decoded = try JSONDecoder().decode(ClaudeResponse.self, from: data)
+    func toWindow(_ window: ClaudeResponse.Window?) -> UsageWindow? {
+        guard let window else { return nil }
+        return UsageWindow(percent: window.utilization ?? 0, resetAt: parseISODate(window.resets_at))
+    }
+    return ClaudeUsage(fiveHour: toWindow(decoded.five_hour), weekly: toWindow(decoded.seven_day))
+}

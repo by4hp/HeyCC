@@ -1,0 +1,14 @@
+# Swift / SwiftPM 构建产物
+/.build/
+/.swiftpm/
+*.o
+*.swiftmodule
+
+# 打包产物
+/CodexBar.app/
+
+# 本地工具配置（机器相关，不进仓库）
+/.claude/
+
+# macOS
+.DS_Store
