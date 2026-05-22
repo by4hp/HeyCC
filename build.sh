@@ -11,8 +11,12 @@ APP="CodexBar.app"
 echo "→ 打包 $APP …"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/CodexBar"
 cp Info.plist "$APP/Contents/Info.plist"
+if [ -d Resources ]; then
+  cp -R Resources/. "$APP/Contents/Resources/"
+fi
 
 # ad-hoc 签名，避免 Gatekeeper 拦截
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true

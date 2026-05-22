@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 小精灵的心情，由面板状态和额度紧张程度决定。
@@ -18,6 +19,8 @@ struct PixelPet: View {
     var pixel: CGFloat = 3
     /// 心情：额度紧张时传 .worried，小精灵会发愁。
     var mood: PetMood = .idle
+    /// 可选宠物形象。
+    var variant: PetVariant = .mascot
     /// 鼠标相对悬浮面板中心的方向，-1 看左、1 看右。
     var gaze: CGFloat = 0
     /// 是否启用面板级眼神跟随。
@@ -28,7 +31,37 @@ struct PixelPet: View {
     @State private var pokeTime: Date?
     @State private var hovering = false
 
-    /// 睁眼帧。`.`=透明 `X`=描边 `+`=高光 `o`=身体 `e`=眼睛 `s`=眼神光 `c`=腮红 `d`=汗珠。
+    /// 生图模型生成的高密度像素宠物帧。资源缺失时会退回到代码绘制的小像素版本。
+    private enum BitmapFrame: String, CaseIterable {
+        case idle
+        case blink
+        case lookLeft = "look_left"
+        case lookRight = "look_right"
+        case happy
+        case thinking
+        case worried
+        case sleepy
+        case celebrate
+    }
+
+    private static let portraitBitmaps = loadBitmaps(subdirectory: "Pets/flower_pet_frames")
+    private static let chibiBitmaps = loadBitmaps(subdirectory: "Pets/chibi_pet_frames")
+
+    private static func loadBitmaps(subdirectory: String) -> [BitmapFrame: Image] {
+        var frames: [BitmapFrame: Image] = [:]
+        for frame in BitmapFrame.allCases {
+            guard let url = Bundle.main.url(
+                forResource: frame.rawValue,
+                withExtension: "png",
+                subdirectory: subdirectory),
+                let nsImage = NSImage(contentsOf: url)
+            else { continue }
+            frames[frame] = Image(nsImage: nsImage)
+        }
+        return frames
+    }
+
+    /// 睁眼帧。`.`=透明；其余字符按宠物样式映射到不同调色板。
     private static let openFrame: [String] = [
         "......XXXX......",
         "....XX++++XX....",
@@ -124,13 +157,180 @@ struct PixelPet: View {
         return frame
     }()
 
+    /// 由用户给的花墙人物照片提炼出的像素宠物：粉花、黑发、蓝白格纹衣服与绿色吊坠。
+    private static let portraitOpenFrame: [String] = [
+        "....pPp..pPp....",
+        "...PppPppPppP...",
+        "..ppkkkkkkkkpp..",
+        ".pkkhhhhhhhhkkp.",
+        "..kkkffffffkkk..",
+        "..kkffffffffkk..",
+        "..khfeeffeefhk..",
+        "..khfffffffhhk..",
+        "..kkffffrfffkk..",
+        "...kkffffffkk...",
+        "..nnnnbbbbnnnn..",
+        "..nbwbwbwbwbwn..",
+        "..nwbwbwbwbwbn..",
+        "..nbwbwggwbwbn..",
+        "...nwbwbwbwbn...",
+        "....nnnnnnnn....",
+    ]
+
+    private static let portraitBlinkFrame: [String] = {
+        var frame = portraitOpenFrame
+        frame[6] = "..khfkkffkkfhk.."
+        return frame
+    }()
+
+    private static let portraitHappyFrame: [String] = {
+        var frame = portraitBlinkFrame
+        frame[8] = "..kkffffrrffkk.."
+        return frame
+    }()
+
+    private static let portraitLookLeftFrame: [String] = {
+        var frame = portraitOpenFrame
+        frame[6] = "..kheeffeeffhk.."
+        return frame
+    }()
+
+    private static let portraitLookRightFrame: [String] = {
+        var frame = portraitOpenFrame
+        frame[6] = "..khffeeffeehk.."
+        return frame
+    }()
+
+    private static let portraitThinkingFrame: [String] = {
+        var frame = portraitLookLeftFrame
+        frame[8] = "..kkffffkkffkk.."
+        return frame
+    }()
+
+    private static let portraitSleepyFrame: [String] = {
+        var frame = portraitBlinkFrame
+        frame[8] = "..kkfffkkfffkk.."
+        return frame
+    }()
+
+    private static let portraitCelebrateFrame: [String] = {
+        var frame = portraitBlinkFrame
+        frame[8] = "..kkffffrrffkk.."
+        frame[13] = "..nbwbggggbwbn.."
+        return frame
+    }()
+
+    private static let portraitWorriedFrame: [String] = {
+        var frame = portraitOpenFrame
+        frame[5] = "..kkfffffffdkk.."
+        frame[8] = "..kkfffkkfffkk.."
+        return frame
+    }()
+
+    private static let portraitCriticalFrame: [String] = {
+        var frame = portraitWorriedFrame
+        frame[4] = "..kkfffffddfkk.."
+        frame[6] = "..khfeeffeefhk.."
+        return frame
+    }()
+
+    // MARK: 负鼠
+
+    /// 取自「此人绝非扇贝」表情包的负鼠：大圆耳、奶白脸、粉鼻头、灰身子，胸前抱着一对小粉爪。
+    private static let opossumOpenFrame: [String] = [
+        "...EE......EE...",
+        "..EiiE....EiiE..",
+        "..EiiEffffEiiE..",
+        "..EiiffffffiiE..",
+        "...ffffffffff...",
+        "..ffffffffffff..",
+        "..ffseffffesff..",
+        "..ffeeffffeeff..",
+        "..ffffnnnnffff..",
+        "...fffnnnnfff...",
+        "....ffffffff....",
+        "...gggggggggg...",
+        "..gggggggggggg..",
+        "..ggggiiiigggg..",
+        "..gGggiiiigGgg..",
+        "...GggggggggG...",
+    ]
+
+    /// 眨眼帧：合上上排眼睛。
+    private static let opossumBlinkFrame: [String] = {
+        var frame = opossumOpenFrame
+        frame[6] = "..ffffffffffff.."
+        return frame
+    }()
+
+    /// 开心帧：眯眼 + 一张小嘴。
+    private static let opossumHappyFrame: [String] = {
+        var frame = opossumBlinkFrame
+        frame[10] = "....fffeefff...."
+        return frame
+    }()
+
+    /// 眼神向左：鼠标在左侧时用。
+    private static let opossumLookLeftFrame: [String] = {
+        var frame = opossumOpenFrame
+        frame[6] = "..fseffffesfff.."
+        frame[7] = "..feeffffeefff.."
+        return frame
+    }()
+
+    /// 眼神向右：鼠标在右侧时用。
+    private static let opossumLookRightFrame: [String] = {
+        var frame = opossumOpenFrame
+        frame[6] = "..fffseffffesf.."
+        frame[7] = "..fffeeffffeef.."
+        return frame
+    }()
+
+    /// 思考帧：眼睛瞟向一边，抿着小嘴盘账。
+    private static let opossumThinkingFrame: [String] = {
+        var frame = opossumLookLeftFrame
+        frame[10] = "....fffeefff...."
+        return frame
+    }()
+
+    /// 困倦帧：深夜合上眼。
+    private static let opossumSleepyFrame: [String] = {
+        var frame = opossumOpenFrame
+        frame[6] = "..ffffffffffff.."
+        return frame
+    }()
+
+    /// 庆祝帧：眯眼咧嘴 + 红扑扑的脸颊。
+    private static let opossumCelebrateFrame: [String] = {
+        var frame = opossumBlinkFrame
+        frame[8] = "..fiffnnnnffif.."
+        frame[10] = "....ffeeeeff...."
+        return frame
+    }()
+
+    /// 发愁帧：冒一滴汗 + 抿紧的小嘴。
+    private static let opossumWorriedFrame: [String] = {
+        var frame = opossumOpenFrame
+        frame[5] = "..fffffffffffd.."
+        frame[10] = ".......ee......."
+        return frame
+    }()
+
+    /// 临界帧：汗珠更多、张着嘴更紧张。
+    private static let opossumCriticalFrame: [String] = {
+        var frame = opossumWorriedFrame
+        frame[4] = "...fffffffffd..."
+        frame[10] = "....ffeeeeff...."
+        return frame
+    }()
+
     private static let starColor = Color(red: 1, green: 0.84, blue: 0.42)
     private static let thoughtColor = Color(red: 0.76, green: 0.92, blue: 1.0)
     private static let concernColor = Color(red: 1, green: 0.68, blue: 0.32)
     private static let warningColor = Color(red: 1, green: 0.38, blue: 0.32)
 
     var body: some View {
-        let box = pixel * 20 // side(16) + 留白(4)
+        let box = pixel * (isBitmapPet ? 34 : 20)
         return TimelineView(.animation) { context in
             petContent(at: context.date)
         }
@@ -147,15 +347,20 @@ struct PixelPet: View {
 
     /// 某一帧时刻的整只小精灵（精灵本体 + 星星）。
     private func petContent(at now: Date) -> some View {
-        let side = pixel * 16
-        let box = pixel * 20
+        let side = pixel * (isBitmapPet ? 24 : 16)
+        let box = pixel * (isBitmapPet ? 34 : 20)
         let time = now.timeIntervalSinceReferenceDate
         let react = reaction(at: now)
         let bob = sin(time * 2.3) * 1.6 - react * 9 // 被戳往上蹦
         let stretch = 1 + 0.05 * sin(time * 2.3 + .pi / 2) + react * 0.18
 
         return ZStack {
-            sprite(currentFrame(react: react, time: time), side: side)
+            petSprite(
+                currentFrame(react: react, time: time),
+                side: side,
+                box: box,
+                react: react,
+                time: time)
                 .scaleEffect(x: 2 - stretch, y: stretch, anchor: .bottom)
                 .rotationEffect(.degrees(Double(gaze) * (gazeActive ? 7 : 0)))
             idleStar(side: side, opacity: mood == .idle && react <= 0.05 ? sparkle(at: time) : 0)
@@ -171,12 +376,32 @@ struct PixelPet: View {
         .offset(y: bob)
     }
 
+    /// 当前宠物本体：花间像素人优先使用生图模型产出的高密度像素图，其余样式继续用字符网格绘制。
+    @ViewBuilder
+    private func petSprite(
+        _ frame: [String],
+        side: CGFloat,
+        box: CGFloat,
+        react: Double,
+        time: Double) -> some View {
+        if let bitmap = bitmapImage(react: react, time: time)
+        {
+            bitmap
+                .resizable()
+                .interpolation(.none)
+                .scaledToFit()
+                .frame(width: bitmapWidth(box: box), height: box)
+        } else {
+            sprite(frame, side: side)
+        }
+    }
+
     /// 把字符网格画成像素精灵。
     private func sprite(_ frame: [String], side: CGFloat) -> some View {
         Canvas { ctx, _ in
             for (row, line) in frame.enumerated() {
                 for (col, char) in line.enumerated() {
-                    guard let color = Self.color(for: char) else { continue }
+                    guard let color = Self.color(for: char, variant: variant) else { continue }
                     ctx.fill(
                         Path(CGRect(
                             x: CGFloat(col) * pixel, y: CGFloat(row) * pixel,
@@ -253,6 +478,15 @@ struct PixelPet: View {
 
     /// 按反应/心情/眨眼挑选当前帧。
     private func currentFrame(react: Double, time: Double) -> [String] {
+        if variant == .chibiPortrait {
+            return currentPortraitFrame(react: react, time: time)
+        }
+        if variant == .flowerPortrait {
+            return currentPortraitFrame(react: react, time: time)
+        }
+        if variant == .opossum {
+            return currentOpossumFrame(react: react, time: time)
+        }
         if react > 0.05 { return Self.happyFrame }
         if mood == .critical { return Self.criticalFrame }
         if mood == .thinking { return Self.thinkingFrame }
@@ -262,6 +496,69 @@ struct PixelPet: View {
         if gazeActive, gaze < -0.12 { return Self.lookLeftFrame }
         if gazeActive, gaze > 0.12 { return Self.lookRightFrame }
         return isBlinking(at: time) ? Self.blinkFrame : Self.openFrame
+    }
+
+    /// 花间像素人的状态帧。
+    private func currentPortraitFrame(react: Double, time: Double) -> [String] {
+        if react > 0.05 { return Self.portraitHappyFrame }
+        if mood == .critical { return Self.portraitCriticalFrame }
+        if mood == .thinking { return Self.portraitThinkingFrame }
+        if mood == .sleepy { return Self.portraitSleepyFrame }
+        if mood == .celebrate { return Self.portraitCelebrateFrame }
+        if mood == .worried { return Self.portraitWorriedFrame }
+        if gazeActive, gaze < -0.12 { return Self.portraitLookLeftFrame }
+        if gazeActive, gaze > 0.12 { return Self.portraitLookRightFrame }
+        return isBlinking(at: time) ? Self.portraitBlinkFrame : Self.portraitOpenFrame
+    }
+
+    /// 花间像素人的高密度图片帧。
+    private func currentBitmapFrame(react: Double, time: Double) -> BitmapFrame {
+        if react > 0.05 { return .happy }
+        if mood == .critical { return .worried }
+        if mood == .thinking { return .thinking }
+        if mood == .sleepy { return .sleepy }
+        if mood == .celebrate { return .celebrate }
+        if mood == .worried { return .worried }
+        if gazeActive, gaze < -0.12 { return .lookLeft }
+        if gazeActive, gaze > 0.12 { return .lookRight }
+        return isBlinking(at: time) ? .blink : .idle
+    }
+
+    private var isBitmapPet: Bool {
+        variant == .flowerPortrait || variant == .chibiPortrait
+    }
+
+    private func bitmapImage(react: Double, time: Double) -> Image? {
+        let frame = currentBitmapFrame(react: react, time: time)
+        switch variant {
+        case .flowerPortrait:
+            return Self.portraitBitmaps[frame]
+        case .chibiPortrait:
+            return Self.chibiBitmaps[frame]
+        case .mascot, .opossum:
+            return nil
+        }
+    }
+
+    private func bitmapWidth(box: CGFloat) -> CGFloat {
+        switch variant {
+        case .flowerPortrait: return box * 0.78
+        case .chibiPortrait: return box
+        case .mascot, .opossum: return box
+        }
+    }
+
+    /// 负鼠的状态帧。
+    private func currentOpossumFrame(react: Double, time: Double) -> [String] {
+        if react > 0.05 { return Self.opossumHappyFrame }
+        if mood == .critical { return Self.opossumCriticalFrame }
+        if mood == .thinking { return Self.opossumThinkingFrame }
+        if mood == .sleepy { return Self.opossumSleepyFrame }
+        if mood == .celebrate { return Self.opossumCelebrateFrame }
+        if mood == .worried { return Self.opossumWorriedFrame }
+        if gazeActive, gaze < -0.12 { return Self.opossumLookLeftFrame }
+        if gazeActive, gaze > 0.12 { return Self.opossumLookRightFrame }
+        return isBlinking(at: time) ? Self.opossumBlinkFrame : Self.opossumOpenFrame
     }
 
     /// 被戳后 0.7 秒内的反应强度，正弦 0→1→0。
@@ -287,16 +584,48 @@ struct PixelPet: View {
         return sin((phase - (cycle - 1.1)) / 1.1 * .pi) * 0.95
     }
 
-    private static func color(for char: Character) -> Color? {
-        switch char {
-        case "X": return Color(red: 0.30, green: 0.19, blue: 0.13)
-        case "+": return Color(red: 0.97, green: 0.78, blue: 0.62)
-        case "o": return Color(red: 0.87, green: 0.49, blue: 0.34)
-        case "e": return Color(red: 0.20, green: 0.13, blue: 0.11)
-        case "s": return Color.white
-        case "c": return Color(red: 0.96, green: 0.60, blue: 0.52)
-        case "d": return Color(red: 0.56, green: 0.80, blue: 0.96) // 汗珠
-        default: return nil
+    private static func color(for char: Character, variant: PetVariant) -> Color? {
+        switch variant {
+        case .mascot:
+            switch char {
+            case "X": return Color(red: 0.30, green: 0.19, blue: 0.13)
+            case "+": return Color(red: 0.97, green: 0.78, blue: 0.62)
+            case "o": return Color(red: 0.87, green: 0.49, blue: 0.34)
+            case "e": return Color(red: 0.20, green: 0.13, blue: 0.11)
+            case "s": return Color.white
+            case "c": return Color(red: 0.96, green: 0.60, blue: 0.52)
+            case "d": return Color(red: 0.56, green: 0.80, blue: 0.96)
+            default: return nil
+            }
+        case .flowerPortrait, .chibiPortrait:
+            switch char {
+            case "k": return Color(red: 0.07, green: 0.08, blue: 0.09)
+            case "h": return Color(red: 0.32, green: 0.16, blue: 0.10)
+            case "f": return Color(red: 0.96, green: 0.78, blue: 0.70)
+            case "e": return Color(red: 0.10, green: 0.08, blue: 0.07)
+            case "r": return Color(red: 0.80, green: 0.18, blue: 0.20)
+            case "p": return Color(red: 0.96, green: 0.28, blue: 0.48)
+            case "P": return Color(red: 1.00, green: 0.62, blue: 0.76)
+            case "g": return Color(red: 0.18, green: 0.52, blue: 0.38)
+            case "b": return Color(red: 0.18, green: 0.42, blue: 0.62)
+            case "w": return Color(red: 0.90, green: 0.94, blue: 0.92)
+            case "n": return Color(red: 0.04, green: 0.12, blue: 0.20)
+            case "d": return Color(red: 0.56, green: 0.80, blue: 0.96)
+            default: return nil
+            }
+        case .opossum:
+            switch char {
+            case "E": return Color(red: 0.21, green: 0.20, blue: 0.23) // 耳朵与暗部
+            case "i": return Color(red: 0.95, green: 0.71, blue: 0.74) // 耳内与小爪子的粉
+            case "f": return Color(red: 0.92, green: 0.91, blue: 0.88) // 奶白脸
+            case "e": return Color(red: 0.10, green: 0.09, blue: 0.11) // 黑豆眼与嘴
+            case "s": return Color.white                               // 眼里的高光
+            case "n": return Color(red: 0.96, green: 0.56, blue: 0.62) // 粉鼻头
+            case "g": return Color(red: 0.64, green: 0.64, blue: 0.68) // 灰身子
+            case "G": return Color(red: 0.47, green: 0.47, blue: 0.52) // 身子暗部
+            case "d": return Color(red: 0.56, green: 0.80, blue: 0.96) // 汗珠
+            default: return nil
+            }
         }
     }
 }

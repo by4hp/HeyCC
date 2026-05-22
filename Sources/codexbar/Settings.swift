@@ -82,6 +82,7 @@ struct SettingsView: View {
     @State private var showCodexCalendar = false
     @State private var chartMode: ChartProviderMode
     @State private var chartRange: ChartRange
+    @State private var petVariant: PetVariant
 
     private let claudePlan: String?
     private let codexPlan: String?
@@ -92,6 +93,7 @@ struct SettingsView: View {
     private let codexTint = Color(red: 0.26, green: 0.72, blue: 0.66)
     private let deepseekTint = Color(red: 0.55, green: 0.50, blue: 0.95)
     private let chartTint = Color(red: 0.40, green: 0.52, blue: 0.92)
+    private let petTint = Color(red: 0.92, green: 0.35, blue: 0.52)
 
     init(config: CodexBarConfig,
          claudePlan: String?,
@@ -104,6 +106,7 @@ struct SettingsView: View {
         _userName = State(initialValue: config.userName)
         _chartMode = State(initialValue: config.chartProviderMode)
         _chartRange = State(initialValue: config.chartRange)
+        _petVariant = State(initialValue: config.petVariant)
         self.claudePlan = claudePlan
         self.codexPlan = codexPlan
         self.onSave = onSave
@@ -116,6 +119,7 @@ struct SettingsView: View {
             planSection
             renewalSection
             chartSection
+            petSection
             quipSection
             footer
         }
@@ -129,7 +133,7 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 13) {
-            PixelPet(pixel: 3)
+            PixelPet(pixel: 3, variant: petVariant)
             VStack(alignment: .leading, spacing: 2) {
                 Text("CodexBar 设置")
                     .font(.system(size: 16, weight: .semibold))
@@ -219,6 +223,21 @@ struct SettingsView: View {
         }
     }
 
+    private var petSection: some View {
+        section("像素宠物",
+                footnote: "选择刘海面板底部陪你看额度的像素形象。") {
+            row(icon: "pawprint.fill", tint: petTint, title: "宠物样式") {
+                Picker("", selection: $petVariant) {
+                    ForEach(PetVariant.allCases, id: \.self) { variant in
+                        Text(variant.displayName).tag(variant)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 128)
+            }
+        }
+    }
+
     private var quipSection: some View {
         section("俏皮总结",
                 footnote: "刘海面板底部那句俏皮话由 deepseek-v4-flash 生成，留空 API Key 即关闭。") {
@@ -252,7 +271,8 @@ struct SettingsView: View {
                     codexRenewalDay: codexDay,
                     userName: userName.trimmingCharacters(in: .whitespacesAndNewlines),
                     chartProviderMode: chartMode,
-                    chartRange: chartRange))
+                    chartRange: chartRange,
+                    petVariant: petVariant))
                 onClose()
             }
             .controlSize(.large)

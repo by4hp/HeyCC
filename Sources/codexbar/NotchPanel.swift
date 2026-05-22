@@ -31,6 +31,8 @@ final class PanelModel: ObservableObject {
     @Published var chartRange: ChartRange = .week
     /// 图表里 Claude / Codex 的区分方式，来自配置、在「设置」里改。
     @Published var chartProviderMode: ChartProviderMode = .combined
+    /// 面板底部的像素宠物样式，来自配置、在「设置」里改。
+    @Published var petVariant: PetVariant = .mascot
     /// 在图表顶部切换时间范围时触发（由 AppDelegate 注入：写回配置）。
     var onChartRangeChanged: ((ChartRange) -> Void)?
 }
@@ -41,7 +43,7 @@ enum NotchMetrics {
     static let panelWidth: CGFloat = 392
     /// 刘海下方的内容区高度（窗口总高 = 刘海高度 + 此值）。
     /// 留足空间让周/月热力图的方块足够大、能舒展铺开。
-    static let contentHeight: CGFloat = 430
+    static let contentHeight: CGFloat = 448
     static let cornerRadius: CGFloat = 24
 }
 
@@ -141,7 +143,7 @@ struct NotchPanelView: View {
 struct QuipFooter: View {
     @ObservedObject var model: PanelModel
 
-    private static let footerHeight: CGFloat = 70
+    private static let footerHeight: CGFloat = 88
     private static let bubbleHeight: CGFloat = 60
 
     @State private var displayed = ""
@@ -174,6 +176,7 @@ struct QuipFooter: View {
             PixelPet(
                 pixel: 2.5,
                 mood: petMood,
+                variant: model.petVariant,
                 gaze: model.petGaze,
                 gazeActive: model.expanded,
                 onPoke: { model.onPokePet?() })

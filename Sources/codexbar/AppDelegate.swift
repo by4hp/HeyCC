@@ -418,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.userName = config.userName
         model.chartProviderMode = config.chartProviderMode
         model.chartRange = config.chartRange
+        model.petVariant = config.petVariant
     }
 
     /// 仅把图表时间范围写回配置文件（其余字段保持不变）。

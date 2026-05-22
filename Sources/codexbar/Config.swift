@@ -32,6 +32,23 @@ enum ChartRange: String, Sendable, CaseIterable {
     }
 }
 
+/// 面板底部可选的像素宠物样式。
+enum PetVariant: String, Sendable, CaseIterable {
+    case mascot
+    case flowerPortrait = "flower_portrait"
+    case chibiPortrait = "chibi_portrait"
+    case opossum
+
+    var displayName: String {
+        switch self {
+        case .mascot: return "小精灵"
+        case .flowerPortrait: return "花间像素人"
+        case .chibiPortrait: return "卡通大头"
+        case .opossum: return "负鼠"
+        }
+    }
+}
+
 /// CodexBar 个人版的本地配置，存于 ~/.dee_codexbar/config.json。
 /// 用独立目录，避免和原版 CodexBar 的 ~/.codexbar/ 撞文件。
 /// 套餐等级不在这里 —— 由各家接口/凭证自动识别。
@@ -48,13 +65,15 @@ struct CodexBarConfig: Sendable {
     var chartProviderMode: ChartProviderMode
     /// 悬浮窗图表默认的时间范围（也可在图表顶部切换）。
     var chartRange: ChartRange
+    /// 面板底部像素宠物的形象。
+    var petVariant: PetVariant
 
     static let path = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".dee_codexbar/config.json")
 
     static let defaults = CodexBarConfig(
         deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
-        chartProviderMode: .combined, chartRange: .week)
+        chartProviderMode: .combined, chartRange: .week, petVariant: .chibiPortrait)
 
     /// API Key 非空时返回，否则 nil。
     var deepseekKeyIfPresent: String? {
@@ -76,7 +95,8 @@ struct CodexBarConfig: Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines),
             chartProviderMode: ChartProviderMode(rawValue: root["chart_provider_mode"] as? String ?? "")
                 ?? .combined,
-            chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week)
+            chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week,
+            petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .chibiPortrait)
     }
 
     /// 写回配置文件（带中文说明字段）。
@@ -87,7 +107,8 @@ struct CodexBarConfig: Sendable {
             "_说明": "deepseek_api_key 从 https://platform.deepseek.com/api_keys 获取；"
                 + "*_renewal_day 是每月续费日；user_name 是小精灵对你的称呼；"
                 + "chart_provider_mode 是图表区分方式（combined/toggle）；"
-                + "chart_range 是图表默认时间范围（week/month）。"
+                + "chart_range 是图表默认时间范围（week/month）；"
+                + "pet_variant 是底部像素宠物形象（mascot/flower_portrait/chibi_portrait/opossum）。"
                 + "也可在 App 菜单的「设置」里改。套餐等级由接口自动识别，无需配置。",
             "deepseek_api_key": deepseekAPIKey,
             "claude_renewal_day": claudeRenewalDay,
@@ -95,6 +116,7 @@ struct CodexBarConfig: Sendable {
             "user_name": userName,
             "chart_provider_mode": chartProviderMode.rawValue,
             "chart_range": chartRange.rawValue,
+            "pet_variant": petVariant.rawValue,
         ]
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
