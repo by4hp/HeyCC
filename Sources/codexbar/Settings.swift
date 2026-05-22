@@ -86,6 +86,8 @@ struct SettingsView: View {
 
     private let claudePlan: String?
     private let codexPlan: String?
+    /// 额度口径只在悬浮面板顶部切换，设置里不暴露 —— 这里原样保留、保存时透传。
+    private let quotaWindow: QuotaWindow
     private let onSave: (CodexBarConfig) -> Void
     private let onClose: () -> Void
 
@@ -107,6 +109,7 @@ struct SettingsView: View {
         _chartMode = State(initialValue: config.chartProviderMode)
         _chartRange = State(initialValue: config.chartRange)
         _petVariant = State(initialValue: config.petVariant)
+        self.quotaWindow = config.quotaWindow
         self.claudePlan = claudePlan
         self.codexPlan = codexPlan
         self.onSave = onSave
@@ -272,6 +275,7 @@ struct SettingsView: View {
                     userName: userName.trimmingCharacters(in: .whitespacesAndNewlines),
                     chartProviderMode: chartMode,
                     chartRange: chartRange,
+                    quotaWindow: quotaWindow,
                     petVariant: petVariant))
                 onClose()
             }

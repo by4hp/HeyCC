@@ -50,6 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.persistChartRange(range)
         }
 
+        // 在面板顶部切换 5h/周额度 → 写回配置，下次启动记住。
+        model.onQuotaWindowChanged = { [weak self] window in
+            self?.persistQuotaWindow(window)
+        }
+
         notchController = NotchController(model: model)
         notchController?.start()
 
@@ -418,6 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.userName = config.userName
         model.chartProviderMode = config.chartProviderMode
         model.chartRange = config.chartRange
+        model.quotaWindow = config.quotaWindow
         model.petVariant = config.petVariant
     }
 
@@ -426,6 +432,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var config = CodexBarConfig.load()
         guard config.chartRange != range else { return }
         config.chartRange = range
+        try? config.save()
+    }
+
+    /// 仅把额度口径写回配置文件（其余字段保持不变）。
+    private func persistQuotaWindow(_ window: QuotaWindow) {
+        var config = CodexBarConfig.load()
+        guard config.quotaWindow != window else { return }
+        config.quotaWindow = window
         try? config.save()
     }
 

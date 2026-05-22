@@ -19,6 +19,19 @@ struct Subscription: Sendable {
         return calendar.date(byAdding: .month, value: 1, to: thisMonth) ?? thisMonth
     }
 
+    /// 上一次续费日期（含今天）。
+    var lastRenewal: Date {
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        var components = calendar.dateComponents([.year, .month], from: now)
+        components.day = renewalDay
+        components.hour = 0
+        let thisMonth = calendar.date(from: components) ?? now
+        if thisMonth <= today { return thisMonth }
+        return calendar.date(byAdding: .month, value: -1, to: thisMonth) ?? thisMonth
+    }
+
     /// 如「续费 6月3日 · 13 天后」。
     var renewalText: String {
         let calendar = Calendar.current

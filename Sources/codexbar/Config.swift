@@ -32,6 +32,30 @@ enum ChartRange: String, Sendable, CaseIterable {
     }
 }
 
+/// 悬浮弹窗里供应商额度的展示口径（5 小时滚动额度 / 7 天周额度）。
+enum QuotaWindow: String, Sendable, CaseIterable {
+    /// 5 小时滚动额度。
+    case fiveHour = "five_hour"
+    /// 7 天 / 周额度。
+    case weekly
+
+    /// 面板顶部分段控件上的短名。
+    var shortName: String {
+        switch self {
+        case .fiveHour: return "5h"
+        case .weekly: return "周"
+        }
+    }
+
+    /// 供应商行里数值旁的小标签。
+    var badge: String {
+        switch self {
+        case .fiveHour: return "5 小时"
+        case .weekly: return "7 天"
+        }
+    }
+}
+
 /// 面板底部可选的像素宠物样式。
 enum PetVariant: String, Sendable, CaseIterable {
     case mascot
@@ -65,6 +89,8 @@ struct CodexBarConfig: Sendable {
     var chartProviderMode: ChartProviderMode
     /// 悬浮窗图表默认的时间范围（也可在图表顶部切换）。
     var chartRange: ChartRange
+    /// 悬浮弹窗供应商行默认的额度口径（也可在面板顶部切换）。
+    var quotaWindow: QuotaWindow
     /// 面板底部像素宠物的形象。
     var petVariant: PetVariant
 
@@ -73,7 +99,8 @@ struct CodexBarConfig: Sendable {
 
     static let defaults = CodexBarConfig(
         deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
-        chartProviderMode: .combined, chartRange: .week, petVariant: .chibiPortrait)
+        chartProviderMode: .combined, chartRange: .week, quotaWindow: .weekly,
+        petVariant: .chibiPortrait)
 
     /// API Key 非空时返回，否则 nil。
     var deepseekKeyIfPresent: String? {
@@ -96,6 +123,7 @@ struct CodexBarConfig: Sendable {
             chartProviderMode: ChartProviderMode(rawValue: root["chart_provider_mode"] as? String ?? "")
                 ?? .combined,
             chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week,
+            quotaWindow: QuotaWindow(rawValue: root["quota_window"] as? String ?? "") ?? .weekly,
             petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .chibiPortrait)
     }
 
@@ -108,6 +136,7 @@ struct CodexBarConfig: Sendable {
                 + "*_renewal_day 是每月续费日；user_name 是小精灵对你的称呼；"
                 + "chart_provider_mode 是图表区分方式（combined/toggle）；"
                 + "chart_range 是图表默认时间范围（week/month）；"
+                + "quota_window 是悬浮弹窗额度口径（five_hour/weekly）；"
                 + "pet_variant 是底部像素宠物形象（mascot/flower_portrait/chibi_portrait/opossum）。"
                 + "也可在 App 菜单的「设置」里改。套餐等级由接口自动识别，无需配置。",
             "deepseek_api_key": deepseekAPIKey,
@@ -116,6 +145,7 @@ struct CodexBarConfig: Sendable {
             "user_name": userName,
             "chart_provider_mode": chartProviderMode.rawValue,
             "chart_range": chartRange.rawValue,
+            "quota_window": quotaWindow.rawValue,
             "pet_variant": petVariant.rawValue,
         ]
         let data = try JSONSerialization.data(

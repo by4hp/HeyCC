@@ -31,10 +31,14 @@ final class PanelModel: ObservableObject {
     @Published var chartRange: ChartRange = .week
     /// 图表里 Claude / Codex 的区分方式，来自配置、在「设置」里改。
     @Published var chartProviderMode: ChartProviderMode = .combined
+    /// 供应商行展示 5 小时还是周额度，来自配置、可在面板顶部切换。
+    @Published var quotaWindow: QuotaWindow = .weekly
     /// 面板底部的像素宠物样式，来自配置、在「设置」里改。
     @Published var petVariant: PetVariant = .mascot
     /// 在图表顶部切换时间范围时触发（由 AppDelegate 注入：写回配置）。
     var onChartRangeChanged: ((ChartRange) -> Void)?
+    /// 在面板顶部切换额度口径时触发（由 AppDelegate 注入：写回配置）。
+    var onQuotaWindowChanged: ((QuotaWindow) -> Void)?
 }
 
 // MARK: - 尺寸常量
@@ -91,10 +95,12 @@ struct NotchPanelView: View {
                 ProviderRow(
                     state: model.claude,
                     subscription: Subscription(renewalDay: model.claudeRenewalDay),
+                    window: model.quotaWindow,
                     accent: claudeAccent)
                 ProviderRow(
                     state: model.codex,
                     subscription: Subscription(renewalDay: model.codexRenewalDay),
+                    window: model.quotaWindow,
                     accent: codexAccent)
                 Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
                 ChartSection(model: model)
@@ -112,13 +118,17 @@ struct NotchPanelView: View {
         .background(Color.black)
     }
 
-    /// 刘海一行：左右两耳分别放标题与更新时间，中间避开物理刘海。
+    /// 刘海一行：左耳放 5h/周额度切换、右耳放更新时间，中间避开物理刘海。
     private var notchBar: some View {
         HStack(spacing: 0) {
-            Text("周额度总览")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.6))
+            MiniSegmented(
+                items: QuotaWindow.allCases.map { (value: $0, label: $0.shortName) },
+                isActive: { $0 == model.quotaWindow }) { picked in
+                    model.quotaWindow = picked
+                    model.onQuotaWindowChanged?(picked)
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help("切换 5 小时 / 周额度")
             Spacer()
                 .frame(width: model.notchWidth + 8)
             Group {
@@ -306,6 +316,8 @@ struct QuipFooter: View {
 struct ProviderRow: View {
     let state: ProviderState
     let subscription: Subscription
+    /// 当前展示 5 小时还是周额度。
+    let window: QuotaWindow
     let accent: Color
 
     var body: some View {
@@ -328,7 +340,7 @@ struct ProviderRow: View {
                             .background(Capsule().fill(Color.white.opacity(0.1)))
                     }
                     Spacer()
-                    Text("7 天")
+                    Text(window.badge)
                         .font(.system(size: 8.5, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                     Text(valueText)
@@ -348,19 +360,28 @@ struct ProviderRow: View {
         }
     }
 
-    private var weeklyPercent: Double? { state.weekly?.percent }
-    private var fivehPercent: Double? { state.fiveHour?.percent }
-    private var fraction: Double { min(max((weeklyPercent ?? 0) / 100, 0), 1) }
+    /// 当前口径选中的额度窗口。
+    private var activeWindow: UsageWindow? {
+        window == .weekly ? state.weekly : state.fiveHour
+    }
+
+    /// 另一口径的额度窗口，作 usageLine 里的补充信息。
+    private var otherWindow: UsageWindow? {
+        window == .weekly ? state.fiveHour : state.weekly
+    }
+
+    private var activePercent: Double? { activeWindow?.percent }
+    private var fraction: Double { min(max((activePercent ?? 0) / 100, 0), 1) }
 
     private var valueText: String {
         if state.isLoading { return "…" }
-        if let weeklyPercent { return "\(Int(weeklyPercent.rounded()))%" }
+        if let activePercent { return "\(Int(activePercent.rounded()))%" }
         return "—"
     }
 
     private var valueColor: Color {
-        guard let weeklyPercent else { return .white.opacity(0.4) }
-        switch weeklyPercent {
+        guard let activePercent else { return .white.opacity(0.4) }
+        switch activePercent {
         case ..<50: return .white
         case ..<80: return Color(red: 1, green: 0.72, blue: 0.24)
         default: return Color(red: 1, green: 0.40, blue: 0.36)
@@ -371,11 +392,12 @@ struct ProviderRow: View {
         if state.isLoading { return "读取中…" }
         if let error = state.error { return error }
         var parts: [String] = []
-        if let reset = state.weekly?.resetAt {
-            parts.append("周额度重置 " + relativeText(reset))
+        if let reset = activeWindow?.resetAt {
+            parts.append((window == .weekly ? "周额度重置 " : "5h 重置 ") + relativeText(reset))
         }
-        if let fivehPercent {
-            parts.append("5h 用量 \(Int(fivehPercent.rounded()))%")
+        if let other = otherWindow?.percent {
+            parts.append((window == .weekly ? "5h 用量 " : "周用量 ")
+                + "\(Int(other.rounded()))%")
         }
         return parts.isEmpty ? "暂无数据" : parts.joined(separator: "  ·  ")
     }
@@ -399,6 +421,33 @@ struct ProgressBar: View {
     }
 }
 
+// MARK: - 迷你分段控件
+
+/// 通用迷你分段控件：胶囊高亮当前项；面板顶部的额度切换与图表头部的范围切换共用。
+struct MiniSegmented<T: Equatable>: View {
+    let items: [(value: T, label: String)]
+    let isActive: (T) -> Bool
+    let onPick: (T) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items.indices, id: \.self) { index in
+                let item = items[index]
+                let active = isActive(item.value)
+                Button { onPick(item.value) } label: {
+                    Text(item.label)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(active ? 0.95 : 0.4))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(Capsule().fill(Color.white.opacity(active ? 0.16 : 0)))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
 // MARK: - 图表区块
 
 /// 热力图要展示的数据序列。
@@ -409,6 +458,16 @@ enum ChartSeries: Sendable, Equatable {
     case claude
     /// 只看 Codex。
     case codex
+}
+
+/// 月视图热力图上要圈出的「上一次续费」。
+struct RenewalMark {
+    /// 上一次续费发生的日期。
+    let date: Date
+    /// 供应商主色，用来画标注环。
+    let accent: Color
+    /// 供应商名，进格子的悬停提示。
+    let label: String
 }
 
 /// 刘海面板里的用量图表：顶部「周 / 月」切换 + 按设置区分 Claude / Codex 的热力图。
@@ -428,6 +487,14 @@ struct ChartSection: View {
     }
 
     private var range: ChartRange { model.chartRange }
+
+    /// Claude / Codex 上一次续费的位置，月视图里圈出来。
+    private var renewalMarks: [RenewalMark] {
+        [RenewalMark(date: Subscription(renewalDay: model.claudeRenewalDay).lastRenewal,
+                     accent: claudeAccent, label: "Claude"),
+         RenewalMark(date: Subscription(renewalDay: model.codexRenewalDay).lastRenewal,
+                     accent: codexAccent, label: "Codex")]
+    }
 
     // MARK: 顶部
 
@@ -463,9 +530,11 @@ struct ChartSection: View {
         } else {
             switch model.chartProviderMode {
             case .combined:
-                HeatmapGrid(history: model.history, range: range, series: .both)
+                HeatmapGrid(history: model.history, range: range,
+                            series: .both, renewals: renewalMarks)
             case .toggle:
-                HeatmapGrid(history: model.history, range: range, series: toggleSeries)
+                HeatmapGrid(history: model.history, range: range,
+                            series: toggleSeries, renewals: renewalMarks)
             }
         }
     }
@@ -475,21 +544,9 @@ struct ChartSection: View {
     private func segmented<T: Equatable>(_ items: [(T, String)],
                                          isActive: @escaping (T) -> Bool,
                                          onPick: @escaping (T) -> Void) -> some View {
-        HStack(spacing: 2) {
-            ForEach(items.indices, id: \.self) { index in
-                let item = items[index]
-                let active = isActive(item.0)
-                Button { onPick(item.0) } label: {
-                    Text(item.1)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white.opacity(active ? 0.95 : 0.4))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2.5)
-                        .background(Capsule().fill(Color.white.opacity(active ? 0.16 : 0)))
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        MiniSegmented(items: items.map { (value: $0.0, label: $0.1) },
+                      isActive: isActive,
+                      onPick: onPick)
     }
 }
 
@@ -500,6 +557,8 @@ struct HeatmapGrid: View {
     let history: UsageHistory
     let range: ChartRange
     let series: ChartSeries
+    /// 月视图里要圈出的续费日（周视图忽略）。
+    var renewals: [RenewalMark] = []
 
     private static let weekdayNames = ["一", "二", "三", "四", "五", "六", "日"]
 
@@ -622,9 +681,27 @@ struct HeatmapGrid: View {
             let claude = history.dayClaude(dayIndex)
             let codex = history.dayCodex(dayIndex)
             cell(claude: claude, codex: codex, normMax: normMax, side: side)
+                .overlay { renewalRing(forDayIndex: dayIndex, side: side) }
                 .help(monthTooltip(dayIndex: dayIndex, claude: claude, codex: codex))
         } else {
             Color.clear.frame(width: side, height: side)
+        }
+    }
+
+    /// 命中某次续费的那一天，返回对应标记（仅月视图）。
+    private func renewalMark(forDayIndex dayIndex: Int) -> RenewalMark? {
+        guard range == .month, let date = history.dayStart(dayIndex) else { return nil }
+        let calendar = Calendar.current
+        return renewals.first { calendar.isDate($0.date, inSameDayAs: date) }
+    }
+
+    /// 续费日的标注环：套在格子外圈的缝隙里，像在日历上把这天圈出来。
+    @ViewBuilder
+    private func renewalRing(forDayIndex dayIndex: Int, side: CGFloat) -> some View {
+        if let mark = renewalMark(forDayIndex: dayIndex) {
+            RoundedRectangle(cornerRadius: max(1.5, side * 0.22) + 2.3, style: .continuous)
+                .stroke(mark.accent, lineWidth: 1.7)
+                .padding(-2.3)
         }
     }
 
@@ -721,7 +798,12 @@ struct HeatmapGrid: View {
         } else {
             dateText = ""
         }
-        guard claude + codex > 0 else { return "\(dateText) · 无用量" }
-        return "\(dateText) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
+        var line = claude + codex > 0
+            ? "\(dateText) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
+            : "\(dateText) · 无用量"
+        if let mark = renewalMark(forDayIndex: dayIndex) {
+            line += " · \(mark.label) 续费日"
+        }
+        return line
     }
 }
