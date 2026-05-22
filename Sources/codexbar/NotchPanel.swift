@@ -460,14 +460,16 @@ enum ChartSeries: Sendable, Equatable {
     case codex
 }
 
-/// 月视图热力图上要圈出的「上一次续费」。
+/// 月视图热力图上要圈出的一次续费（上一次或下一次）。
 struct RenewalMark {
-    /// 上一次续费发生的日期。
+    /// 续费发生的日期。
     let date: Date
     /// 供应商主色，用来画标注环。
     let accent: Color
     /// 供应商名，进格子的悬停提示。
     let label: String
+    /// true = 已发生的上一次续费（实线环）；false = 即将到来的下一次续费（虚线环）。
+    let isPast: Bool
 }
 
 /// 刘海面板里的用量图表：顶部「周 / 月」切换 + 按设置区分 Claude / Codex 的热力图。
@@ -488,12 +490,26 @@ struct ChartSection: View {
 
     private var range: ChartRange { model.chartRange }
 
-    /// Claude / Codex 上一次续费的位置，月视图里圈出来。
+    /// Claude / Codex 的续费位置，月视图里圈出来：
+    /// 上一次（实线环）总会落在窗口内；下一次（虚线环）只有落进可视网格时才画得出。
     private var renewalMarks: [RenewalMark] {
-        [RenewalMark(date: Subscription(renewalDay: model.claudeRenewalDay).lastRenewal,
-                     accent: claudeAccent, label: "Claude"),
-         RenewalMark(date: Subscription(renewalDay: model.codexRenewalDay).lastRenewal,
-                     accent: codexAccent, label: "Codex")]
+        let providers: [(day: Int, accent: Color, label: String)] = [
+            (model.claudeRenewalDay, claudeAccent, "Claude"),
+            (model.codexRenewalDay, codexAccent, "Codex"),
+        ]
+        let calendar = Calendar.current
+        var marks: [RenewalMark] = []
+        for provider in providers {
+            let sub = Subscription(renewalDay: provider.day)
+            marks.append(RenewalMark(date: sub.lastRenewal, accent: provider.accent,
+                                     label: provider.label, isPast: true))
+            // 今天恰为续费日时上一次/下一次同日，只保留上一次，避免同格双环。
+            if !calendar.isDate(sub.nextRenewal, inSameDayAs: sub.lastRenewal) {
+                marks.append(RenewalMark(date: sub.nextRenewal, accent: provider.accent,
+                                         label: provider.label, isPast: false))
+            }
+        }
+        return marks
     }
 
     // MARK: 顶部
@@ -552,6 +568,56 @@ struct ChartSection: View {
 
 // MARK: - 热力图
 
+// MARK: - 热力格
+
+/// 单个热力格：用量底色 + 可选续费标注环 + 鼠标悬停高亮。
+struct HeatCell: View {
+    /// 用量底色（空格子为淡白）。
+    let color: Color
+    let side: CGFloat
+    /// 悬停时的原生气泡提示。
+    let tooltip: String
+    /// 非 nil 时画续费环；isPast 决定实线（上次）还是虚线（下次）。
+    var renewal: (accent: Color, isPast: Bool)?
+
+    @State private var hovering = false
+
+    private var corner: CGFloat { max(1.5, side * 0.22) }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: corner, style: .continuous)
+            .fill(color)
+            .frame(width: side, height: side)
+            .overlay { renewalRing }
+            .overlay { hoverOutline }
+            .scaleEffect(hovering ? 1.18 : 1)
+            .zIndex(hovering ? 1 : 0)
+            .help(tooltip)
+            .onHover { hovering = $0 }
+            .animation(.spring(response: 0.24, dampingFraction: 0.72), value: hovering)
+    }
+
+    /// 续费标注环：套在格子外圈缝隙里。上一次实线、下一次虚线。
+    @ViewBuilder private var renewalRing: some View {
+        if let renewal {
+            RoundedRectangle(cornerRadius: corner + 2.3, style: .continuous)
+                .stroke(renewal.accent,
+                        style: renewal.isPast
+                            ? StrokeStyle(lineWidth: 1.7)
+                            : StrokeStyle(lineWidth: 1.7, dash: [2.6, 2.2]))
+                .padding(-2.3)
+        }
+    }
+
+    /// 悬停时格子描一圈白边（GitHub 贡献图同款交互）。
+    @ViewBuilder private var hoverOutline: some View {
+        if hovering {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.92), lineWidth: max(1, side * 0.05))
+        }
+    }
+}
+
 /// 单张热力图：周视图为 7 天 × 24 小时，月视图为按周对齐的 30 天格子。
 struct HeatmapGrid: View {
     let history: UsageHistory
@@ -596,10 +662,12 @@ struct HeatmapGrid: View {
                             .frame(width: labelW, alignment: .leading)
                         ForEach(0 ..< cols, id: \.self) { block in
                             let usage = weekBlock(day: day, block: block)
-                            cell(claude: usage.claude, codex: usage.codex,
-                                 normMax: maxValue, side: side)
-                                .help(weekTooltip(day: day, block: block,
-                                                  claude: usage.claude, codex: usage.codex))
+                            HeatCell(
+                                color: cellColor(claude: usage.claude, codex: usage.codex,
+                                                  normMax: maxValue),
+                                side: side,
+                                tooltip: weekTooltip(day: day, block: block,
+                                                     claude: usage.claude, codex: usage.codex))
                         }
                     }
                 }
@@ -680,36 +748,42 @@ struct HeatmapGrid: View {
         if dayIndex >= 0, dayIndex < history.dayCount {
             let claude = history.dayClaude(dayIndex)
             let codex = history.dayCodex(dayIndex)
-            cell(claude: claude, codex: codex, normMax: normMax, side: side)
-                .overlay { renewalRing(forDayIndex: dayIndex, side: side) }
-                .help(monthTooltip(dayIndex: dayIndex, claude: claude, codex: codex))
+            HeatCell(
+                color: cellColor(claude: claude, codex: codex, normMax: normMax),
+                side: side,
+                tooltip: monthTooltip(dayIndex: dayIndex, claude: claude, codex: codex),
+                renewal: renewalDecor(forDayIndex: dayIndex))
+        } else if let mark = renewalMark(forDayIndex: dayIndex) {
+            // 未来日且正好是下次续费：画一个空格子 + 虚线环。
+            HeatCell(
+                color: cellColor(claude: 0, codex: 0, normMax: normMax),
+                side: side,
+                tooltip: futureTooltip(date: monthCellDate(dayIndex), mark: mark),
+                renewal: (accent: mark.accent, isPast: mark.isPast))
         } else {
             Color.clear.frame(width: side, height: side)
         }
     }
 
-    /// 命中某次续费的那一天，返回对应标记（仅月视图）。
+    /// 命中某次续费的那一天，返回对应标记（仅月视图；支持本周内的未来日）。
     private func renewalMark(forDayIndex dayIndex: Int) -> RenewalMark? {
-        guard range == .month, let date = history.dayStart(dayIndex) else { return nil }
+        guard range == .month, let date = monthCellDate(dayIndex) else { return nil }
         let calendar = Calendar.current
         return renewals.first { calendar.isDate($0.date, inSameDayAs: date) }
     }
 
-    /// 续费日的标注环：套在格子外圈的缝隙里，像在日历上把这天圈出来。
-    @ViewBuilder
-    private func renewalRing(forDayIndex dayIndex: Int, side: CGFloat) -> some View {
-        if let mark = renewalMark(forDayIndex: dayIndex) {
-            RoundedRectangle(cornerRadius: max(1.5, side * 0.22) + 2.3, style: .continuous)
-                .stroke(mark.accent, lineWidth: 1.7)
-                .padding(-2.3)
-        }
+    /// 某天若命中续费，返回画环用的 (主色, 是否上一次)。
+    private func renewalDecor(forDayIndex dayIndex: Int) -> (accent: Color, isPast: Bool)? {
+        renewalMark(forDayIndex: dayIndex).map { (accent: $0.accent, isPast: $0.isPast) }
     }
 
-    /// 一个正方形热力格，圆角随边长成比例。
-    private func cell(claude: Int, codex: Int, normMax: Int, side: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: max(1.5, side * 0.22), style: .continuous)
-            .fill(cellColor(claude: claude, codex: codex, normMax: normMax))
-            .frame(width: side, height: side)
+    /// 月视图某格对应的日期 —— 支持超出 history 末端的未来日（本周剩余几天）。
+    private func monthCellDate(_ dayIndex: Int) -> Date? {
+        guard dayIndex >= 0, history.dayCount > 0 else { return nil }
+        if dayIndex < history.dayCount { return history.dayStart(dayIndex) }
+        guard let today = history.dayStart(history.dayCount - 1) else { return nil }
+        return Calendar.current.date(byAdding: .day,
+                                     value: dayIndex - (history.dayCount - 1), to: today)
     }
 
     // MARK: 着色
@@ -789,21 +863,26 @@ struct HeatmapGrid: View {
     }
 
     private func monthTooltip(dayIndex: Int, claude: Int, codex: Int) -> String {
-        let dateText: String
-        if let date = history.dayStart(dayIndex) {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "zh_CN")
-            formatter.dateFormat = "M月d日"
-            dateText = formatter.string(from: date)
-        } else {
-            dateText = ""
-        }
+        let dateText = history.dayStart(dayIndex).map(Self.monthDayText) ?? ""
         var line = claude + codex > 0
             ? "\(dateText) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
             : "\(dateText) · 无用量"
         if let mark = renewalMark(forDayIndex: dayIndex) {
-            line += " · \(mark.label) 续费日"
+            line += mark.isPast ? " · \(mark.label) 续费日" : " · \(mark.label) 下次续费"
         }
         return line
+    }
+
+    /// 未来续费格的提示，如「6月3日 · Claude 下次续费」。
+    private func futureTooltip(date: Date?, mark: RenewalMark) -> String {
+        "\(date.map(Self.monthDayText) ?? "") · \(mark.label) 下次续费"
+    }
+
+    /// 「M月d日」中文日期文本。
+    private static func monthDayText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日"
+        return formatter.string(from: date)
     }
 }
