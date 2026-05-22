@@ -62,8 +62,22 @@ private let quipSystemPrompt = """
 - 直接输出文案本身，不要加引号、不要解释、不要换行。
 """
 
-/// 调用 deepseek-v4-flash，根据用量快照生成一段俏皮总结。
-func generateQuip(from snapshot: UsageSnapshot) async throws -> String {
+/// 用户点击面板上某个元素「问」小精灵时用的系统提示。
+private let replySystemPrompt = """
+你是 CodexBar 菜单栏里的一只像素小精灵，软萌可爱、活泼黏人，是用户写代码时的小伙伴。
+用户刚在面板上点了某个东西想听你说说，我会告诉你他点的是什么、对应的数据。
+你要紧扣他点的这件事，回一句又萌又贴心、带点小见解或小建议的话。
+要求：
+- 语气软乎乎、轻松俏皮，像只会撒娇的小精灵；可爱但别肉麻、别油腻；
+- 称呼用户就直接喊我给的那个名字，绝对不要用「老哥」「兄弟」「主人」「亲」这类称呼；没给名字就用「你」；
+- 一到两句话，45 个汉字以内；
+- 就事论事，针对他点的那件事说，可以玩个小梗或给个小提醒；
+- 最多用一个可爱的 emoji；
+- 直接输出文案本身，不要加引号、不要解释、不要换行。
+"""
+
+/// 调用 deepseek-v4-flash，给定 system 与 user 消息，返回单段文案。
+private func callDeepSeek(system: String, user: String) async throws -> String {
     guard let apiKey = CodexBarConfig.load().deepseekKeyIfPresent else {
         throw QuipError.noAPIKey
     }
@@ -79,8 +93,8 @@ func generateQuip(from snapshot: UsageSnapshot) async throws -> String {
         // 关闭思考模式：只要一句俏皮话，不需要推理链，否则 token 全耗在 reasoning_content 上、content 为空。
         "thinking": ["type": "disabled"],
         "messages": [
-            ["role": "system", "content": quipSystemPrompt],
-            ["role": "user", "content": buildQuipPrompt(snapshot)],
+            ["role": "system", "content": system],
+            ["role": "user", "content": user],
         ],
         "temperature": 1.3,
         "max_tokens": 200,
@@ -103,11 +117,22 @@ func generateQuip(from snapshot: UsageSnapshot) async throws -> String {
           let content = message["content"] as? String
     else { throw QuipError.badResponse }
 
-    let quip = content
+    let text = content
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .replacingOccurrences(of: "\n", with: " ")
-    guard !quip.isEmpty else { throw QuipError.badResponse }
-    return quip
+    guard !text.isEmpty else { throw QuipError.badResponse }
+    return text
+}
+
+/// 根据用量快照生成一段周期性的俏皮总结。
+func generateQuip(from snapshot: UsageSnapshot) async throws -> String {
+    try await callDeepSeek(system: quipSystemPrompt, user: buildQuipPrompt(snapshot))
+}
+
+/// 针对用户在面板上点击的内容（热力图某天、今日脉搏、燃尽预测等）回应一句。
+func generateReply(about context: String, userName: String) async throws -> String {
+    let user = userName.isEmpty ? context : "用户的称呼是「\(userName)」。\n" + context
+    return try await callDeepSeek(system: replySystemPrompt, user: user)
 }
 
 // MARK: - 构造提示词

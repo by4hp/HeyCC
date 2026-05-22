@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - 共享状态
@@ -22,6 +23,8 @@ final class PanelModel: ObservableObject {
     @Published var petGaze: CGFloat = 0
     /// 戳一下宠物时触发（由 AppDelegate 注入：刷新俏皮总结）。
     var onPokePet: (() -> Void)?
+    /// 点击面板元素「问」小精灵时触发（由 AppDelegate 注入：调 DeepSeek 回应）。
+    var onAsk: ((String) -> Void)?
     /// 用户希望被称呼的名字（喂给俏皮总结），来自配置。
     var userName = ""
     /// 当前屏幕刘海尺寸，面板顶部用它在刘海两侧排版。
@@ -448,8 +451,14 @@ struct InsightStrip: View {
     var body: some View {
         HStack(spacing: 8) {
             pulse
+                .contentShape(Rectangle())
+                .onTapGesture { model.onAsk?(pulseQuestion) }
+                .onHover { $0 ? NSCursor.pointingHand.set() : NSCursor.arrow.set() }
             Spacer(minLength: 6)
             burn
+                .contentShape(Rectangle())
+                .onTapGesture { model.onAsk?(burnQuestion) }
+                .onHover { $0 ? NSCursor.pointingHand.set() : NSCursor.arrow.set() }
         }
         .font(.system(size: 9.5).monospacedDigit())
         .lineLimit(1)
@@ -470,7 +479,7 @@ struct InsightStrip: View {
             }
         }
         .foregroundStyle(.white.opacity(0.4))
-        .help("今日累计用量，与近 7 天同一时段的均值相比")
+        .help("今日累计用量，与近 7 天同一时段的均值相比 · 点我问问小精灵")
     }
 
     /// 今日截至当前小时的累计 token。
@@ -496,6 +505,16 @@ struct InsightStrip: View {
         Calendar.current.component(.hour, from: Date())
     }
 
+    /// 点击今日脉搏时抛给小精灵的话。
+    private var pulseQuestion: String {
+        var s = "用户点了面板上的『今日脉搏』：今天到现在累计约 \(shortTokens(todaySoFar)) token"
+        if let delta = todayDelta {
+            let pct = Int(abs(delta).rounded())
+            s += delta >= 0 ? "，比近 7 天同时段均值高 \(pct)%" : "，比近 7 天同时段均值低 \(pct)%"
+        }
+        return s + "。"
+    }
+
     // MARK: 燃尽预测
 
     @ViewBuilder private var burn: some View {
@@ -509,7 +528,7 @@ struct InsightStrip: View {
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8.5))
             }
             .foregroundStyle(urgent ? Self.urgentColor : Self.warnColor)
-            .help("按本窗口当前的消耗速度线性外推")
+            .help("按本窗口当前的消耗速度线性外推 · 点我问问小精灵")
         } else if hasWindowData {
             Label {
                 Text("额度够用到重置")
@@ -517,12 +536,23 @@ struct InsightStrip: View {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 8.5))
             }
             .foregroundStyle(Self.safeColor)
-            .help("按当前消耗速度，本窗口额度够撑到重置")
+            .help("按当前消耗速度，本窗口额度够撑到重置 · 点我问问小精灵")
         }
     }
 
     private var windowWord: String {
         model.quotaWindow == .weekly ? "周额度" : "5h 额度"
+    }
+
+    /// 点击燃尽预测时抛给小精灵的话。
+    private var burnQuestion: String {
+        if let worst = worstBurn {
+            let when = relativeText(Date().addingTimeInterval(worst.timeToExhaust))
+            return "用户点了面板上的『燃尽预测』：按当前消耗速度，"
+                + "\(worst.name) 的\(windowWord)大约 \(when) 后见底，会赶在重置前用完。"
+        }
+        return "用户点了面板上的『燃尽预测』：按当前消耗速度，"
+            + "Claude 和 Codex 的\(windowWord)目前都够撑到重置。"
     }
 
     private var hasWindowData: Bool {
@@ -688,10 +718,10 @@ struct ChartSection: View {
             switch model.chartProviderMode {
             case .combined:
                 HeatmapGrid(history: model.history, range: range,
-                            series: .both, renewals: renewalMarks)
+                            series: .both, renewals: renewalMarks, onAsk: model.onAsk)
             case .toggle:
                 HeatmapGrid(history: model.history, range: range,
-                            series: toggleSeries, renewals: renewalMarks)
+                            series: toggleSeries, renewals: renewalMarks, onAsk: model.onAsk)
             }
         }
     }
@@ -720,6 +750,8 @@ struct HeatCell: View {
     let tooltip: String
     /// 非 nil 时画续费环；isPast 决定实线（上次）还是虚线（下次）。
     var renewal: (accent: Color, isPast: Bool)?
+    /// 点击格子时把它的内容抛给小精灵。
+    var onAsk: ((String) -> Void)?
 
     @State private var hovering = false
 
@@ -733,8 +765,13 @@ struct HeatCell: View {
             .overlay { hoverOutline }
             .scaleEffect(hovering ? 1.18 : 1)
             .zIndex(hovering ? 1 : 0)
-            .help(tooltip)
-            .onHover { hovering = $0 }
+            .help(onAsk == nil ? tooltip : tooltip + " · 点我问问小精灵")
+            .onHover { inside in
+                hovering = inside
+                guard onAsk != nil else { return }
+                if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            }
+            .onTapGesture { onAsk?("用户在用量热力图上点了一格：「\(tooltip)」。") }
             .animation(.spring(response: 0.24, dampingFraction: 0.72), value: hovering)
     }
 
@@ -766,6 +803,8 @@ struct HeatmapGrid: View {
     let series: ChartSeries
     /// 月视图里要圈出的续费日（周视图忽略）。
     var renewals: [RenewalMark] = []
+    /// 点击格子时把它的内容抛给小精灵。
+    var onAsk: ((String) -> Void)?
 
     private static let weekdayNames = ["一", "二", "三", "四", "五", "六", "日"]
 
@@ -808,7 +847,8 @@ struct HeatmapGrid: View {
                                                   normMax: maxValue),
                                 side: side,
                                 tooltip: weekTooltip(day: day, block: block,
-                                                     claude: usage.claude, codex: usage.codex))
+                                                     claude: usage.claude, codex: usage.codex),
+                                onAsk: onAsk)
                         }
                     }
                 }
@@ -893,14 +933,16 @@ struct HeatmapGrid: View {
                 color: cellColor(claude: claude, codex: codex, normMax: normMax),
                 side: side,
                 tooltip: monthTooltip(dayIndex: dayIndex, claude: claude, codex: codex),
-                renewal: renewalDecor(forDayIndex: dayIndex))
+                renewal: renewalDecor(forDayIndex: dayIndex),
+                onAsk: onAsk)
         } else if let mark = renewalMark(forDayIndex: dayIndex) {
             // 未来日且正好是下次续费：画一个空格子 + 虚线环。
             HeatCell(
                 color: cellColor(claude: 0, codex: 0, normMax: normMax),
                 side: side,
                 tooltip: futureTooltip(date: monthCellDate(dayIndex), mark: mark),
-                renewal: (accent: mark.accent, isPast: mark.isPast))
+                renewal: (accent: mark.accent, isPast: mark.isPast),
+                onAsk: onAsk)
         } else {
             Color.clear.frame(width: side, height: side)
         }

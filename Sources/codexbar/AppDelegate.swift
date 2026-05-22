@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 
 struct ProviderState {
     var name: String
@@ -55,6 +56,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.persistQuotaWindow(window)
         }
 
+        // 点击面板上的格子 / 今日脉搏 / 燃尽预测 → 让小精灵针对它回应一句。
+        model.onAsk = { [weak self] context in
+            Task { @MainActor in await self?.askAI(context) }
+        }
+
+        // 本地通知：续费临近时提醒（3 天、1 天各一次）。
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .sound]) { [weak self] _, _ in
+                Task { @MainActor in self?.checkRenewalReminders() }
+            }
+
         notchController = NotchController(model: model)
         notchController?.start()
 
@@ -67,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             while !Task.isCancelled {
                 await scanHistory()
+                checkRenewalReminders()
                 try? await Task.sleep(for: historyInterval)
             }
         }
@@ -158,6 +172,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let status = model.quip ?? model.quipError ?? "无"
         FileHandle.standardError.write(Data("[CodexBar] 俏皮总结：\(status)\n".utf8))
+    }
+
+    /// 用户点击面板元素 → 让 DeepSeek 针对那段内容回应，结果显示在小精灵气泡里。
+    private func askAI(_ context: String) async {
+        if isQuipRefreshing { return }
+        isQuipRefreshing = true
+        model.quipLoading = true
+        defer {
+            isQuipRefreshing = false
+            model.quipLoading = false
+        }
+        do {
+            model.quip = try await generateReply(about: context, userName: model.userName)
+            model.quipError = nil
+        } catch {
+            model.quipError = error.localizedDescription
+        }
     }
 
     /// 把当前用量状态打包成喂给 DeepSeek 的快照。
@@ -450,6 +481,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in await refreshQuip() }
     }
 
+    // MARK: - 续费提醒
+
+    /// 授权可用时，检查两家续费日是否临近。
+    private func checkRenewalReminders() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            guard settings.authorizationStatus == .authorized
+                || settings.authorizationStatus == .provisional else { return }
+            Task { @MainActor in self?.runRenewalReminderCheck() }
+        }
+    }
+
+    /// 续费日 ≤3 天、≤1 天两个节点，每个节点各推一次本地通知。
+    private func runRenewalReminderCheck() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let providers: [(id: String, name: String, day: Int)] = [
+            ("claude", "Claude", model.claudeRenewalDay),
+            ("codex", "Codex", model.codexRenewalDay),
+        ]
+        for provider in providers {
+            let next = Subscription(renewalDay: provider.day).nextRenewal
+            let cycle = Self.dayKey(next)
+            let days = calendar.dateComponents(
+                [.day], from: today, to: calendar.startOfDay(for: next)).day ?? 0
+            if days <= 1 {
+                fireRenewalReminder(provider: provider.id, name: provider.name,
+                                    cycle: cycle, slot: "imminent", days: days)
+            } else if days <= 3 {
+                fireRenewalReminder(provider: provider.id, name: provider.name,
+                                    cycle: cycle, slot: "early", days: days)
+            }
+        }
+    }
+
+    /// 某个续费节点若还没提醒过，就推一条通知并记下来（按续费周期去重）。
+    private func fireRenewalReminder(provider: String, name: String,
+                                     cycle: String, slot: String, days: Int) {
+        let defaults = UserDefaults.standard
+        let cycleKey = "renewalReminderCycle_\(provider)"
+        let slotsKey = "renewalReminderSlots_\(provider)"
+        // 续费周期一变（上次续费已过），旧的已提醒记录自动作废。
+        var firedSlots = defaults.string(forKey: cycleKey) == cycle
+            ? (defaults.array(forKey: slotsKey) as? [String] ?? [])
+            : []
+        guard !firedSlots.contains(slot) else { return }
+        firedSlots.append(slot)
+        defaults.set(cycle, forKey: cycleKey)
+        defaults.set(firedSlots, forKey: slotsKey)
+
+        let body: String
+        if days <= 0 {
+            body = "今天 \(name) 就续费，新额度马上到～"
+        } else if days == 1 {
+            body = "明天 \(name) 就要续费咯，今晚悠着点用～"
+        } else {
+            body = "还有 \(days) 天，\(name) 的额度就要续费啦"
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "CodexBar · 续费提醒"
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: "renewal-\(provider)-\(cycle)-\(slot)",
+            content: content, trigger: nil))
+    }
+
+    /// yyyy-MM-dd 形式的日期键。
+    private static func dayKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_: NSMenu) {
@@ -463,6 +567,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pendingMenuRebuild = false
             rebuildMenu()
         }
+    }
+}
+
+// MARK: - 通知前台展示
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    /// 应用在前台时也照常弹出续费提醒横幅。
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 }
 
