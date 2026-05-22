@@ -86,8 +86,9 @@ struct SettingsView: View {
 
     private let claudePlan: String?
     private let codexPlan: String?
-    /// 额度口径只在悬浮面板顶部切换，设置里不暴露 —— 这里原样保留、保存时透传。
+    /// 额度口径与固定开关只在悬浮面板上切换，设置里不暴露 —— 原样保留、保存时透传。
     private let quotaWindow: QuotaWindow
+    private let pinned: Bool
     private let onSave: (NibbiConfig) -> Void
     private let onClose: () -> Void
 
@@ -110,6 +111,7 @@ struct SettingsView: View {
         _chartRange = State(initialValue: config.chartRange)
         _petVariant = State(initialValue: config.petVariant)
         self.quotaWindow = config.quotaWindow
+        self.pinned = config.pinned
         self.claudePlan = claudePlan
         self.codexPlan = codexPlan
         self.onSave = onSave
@@ -284,7 +286,8 @@ struct SettingsView: View {
                     chartProviderMode: chartMode,
                     chartRange: chartRange,
                     quotaWindow: quotaWindow,
-                    petVariant: petVariant))
+                    petVariant: petVariant,
+                    pinned: pinned))
                 onClose()
             }
             .controlSize(.large)

@@ -42,6 +42,10 @@ final class PanelModel: ObservableObject {
     var onChartRangeChanged: ((ChartRange) -> Void)?
     /// 在面板顶部切换额度口径时触发（由 AppDelegate 注入：写回配置）。
     var onQuotaWindowChanged: ((QuotaWindow) -> Void)?
+    /// 是否固定显示面板（常驻、不随鼠标悬停收起），来自配置、可在刘海栏钉住。
+    @Published var pinned = false
+    /// 切换固定显示时触发（由 AppDelegate 注入：写回配置）。
+    var onPinnedChanged: ((Bool) -> Void)?
 }
 
 // MARK: - 尺寸常量
@@ -122,7 +126,7 @@ struct NotchPanelView: View {
         .background(Color.black)
     }
 
-    /// 刘海一行：左耳放 5h/周额度切换、右耳放更新时间，中间避开物理刘海。
+    /// 刘海一行：左耳放 5h/周额度切换，右耳放固定开关与更新时间，中间避开物理刘海。
     private var notchBar: some View {
         HStack(spacing: 0) {
             MiniSegmented(
@@ -135,17 +139,37 @@ struct NotchPanelView: View {
                 .help("切换 5 小时 / 周额度")
             Spacer()
                 .frame(width: model.notchWidth + 8)
-            Group {
+            HStack(spacing: 5) {
+                pinButton
                 if let updated = model.lastUpdated {
-                    Text("更新 " + clockText(updated))
+                    Text(clockText(updated))
                         .font(.system(size: 9.5).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.4))
+                        .help("上次更新时间")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 18)
         .frame(height: model.notchHeight)
+    }
+
+    /// 固定显示开关：钉住面板使其常驻，不随鼠标悬停收起。
+    private var pinButton: some View {
+        Button {
+            model.pinned.toggle()
+            model.onPinnedChanged?(model.pinned)
+        } label: {
+            Image(systemName: model.pinned ? "pin.fill" : "pin")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(model.pinned
+                    ? Color(red: 1, green: 0.72, blue: 0.30)
+                    : .white.opacity(0.42))
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(model.pinned ? "取消固定，面板恢复悬停显示" : "固定面板，常驻显示")
     }
 
 }

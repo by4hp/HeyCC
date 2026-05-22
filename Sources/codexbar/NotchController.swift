@@ -113,10 +113,10 @@ final class NotchController {
         let pointer = NSEvent.mouseLocation
         let inside = currentHotZone(on: screen).contains(pointer)
         updatePetGaze(pointer: pointer, active: inside)
-        if inside {
+        // 固定显示时面板常驻展开；否则离开热区即收起，保持跟手。
+        if inside || model.pinned {
             if !model.expanded { setExpanded(true) }
         } else if model.expanded {
-            // 离开热区即收起，无缓冲，保持跟手。
             setExpanded(false)
         }
     }
