@@ -47,6 +47,12 @@ struct UsageHistory: Sendable {
     /// 某一天的合计 token。
     func dayTotal(_ day: Int) -> Int { dayClaude(day) + dayCodex(day) }
 
+    /// 某一天从 0 点到 hour 时（含）的累计 token —— 用于「今日 vs 日均」的同时段对比。
+    func dayTotalUpToHour(_ day: Int, _ hour: Int) -> Int {
+        let last = max(0, min(hour, 23))
+        return (0 ... last).reduce(0) { $0 + (bucket(day: day, hour: $1)?.total ?? 0) }
+    }
+
     /// 今天累计 token。
     var todayTotal: Int { dayCount > 0 ? dayTotal(dayCount - 1) : 0 }
 

@@ -47,7 +47,7 @@ enum NotchMetrics {
     static let panelWidth: CGFloat = 392
     /// 刘海下方的内容区高度（窗口总高 = 刘海高度 + 此值）。
     /// 留足空间让周/月热力图的方块足够大、能舒展铺开。
-    static let contentHeight: CGFloat = 448
+    static let contentHeight: CGFloat = 476
     static let cornerRadius: CGFloat = 24
 }
 
@@ -102,6 +102,7 @@ struct NotchPanelView: View {
                     subscription: Subscription(renewalDay: model.codexRenewalDay),
                     window: model.quotaWindow,
                     accent: codexAccent)
+                InsightStrip(model: model)
                 Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
                 ChartSection(model: model)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -418,6 +419,146 @@ struct ProgressBar: View {
         }
         .frame(height: 5)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: fraction)
+    }
+}
+
+// MARK: - 洞察条
+
+/// 一次燃尽预测的结果。
+private struct BurnEstimate {
+    let name: String
+    /// 距离触顶（100%）还有多久。
+    let timeToExhaust: TimeInterval
+    /// 距离窗口重置还有多久。
+    let resetIn: TimeInterval
+    /// 是否会在重置前就见底。
+    let exhaustsBeforeReset: Bool
+}
+
+/// 供应商行下方的一行小字：左为「今日脉搏」，右为「燃尽预测」。
+struct InsightStrip: View {
+    @ObservedObject var model: PanelModel
+
+    private static let upColor = Color(red: 1, green: 0.72, blue: 0.30)
+    private static let downColor = Color(red: 0.45, green: 0.78, blue: 0.95)
+    private static let safeColor = Color(red: 0.46, green: 0.83, blue: 0.58)
+    private static let warnColor = Color(red: 1, green: 0.72, blue: 0.24)
+    private static let urgentColor = Color(red: 1, green: 0.40, blue: 0.36)
+
+    var body: some View {
+        HStack(spacing: 8) {
+            pulse
+            Spacer(minLength: 6)
+            burn
+        }
+        .font(.system(size: 9.5).monospacedDigit())
+        .lineLimit(1)
+        .frame(height: 17)
+    }
+
+    // MARK: 今日脉搏
+
+    private var pulse: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "bolt.fill").font(.system(size: 8))
+            Text("今日 \(shortTokens(todaySoFar))")
+                .foregroundStyle(.white.opacity(0.55))
+            if let delta = todayDelta {
+                let up = delta >= 0
+                Text("\(up ? "↑" : "↓")\(Int(abs(delta).rounded()))%")
+                    .foregroundStyle(up ? Self.upColor : Self.downColor)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.4))
+        .help("今日累计用量，与近 7 天同一时段的均值相比")
+    }
+
+    /// 今日截至当前小时的累计 token。
+    private var todaySoFar: Int {
+        let history = model.history
+        guard history.dayCount > 0 else { return 0 }
+        return history.dayTotalUpToHour(history.dayCount - 1, currentHour)
+    }
+
+    /// 今日 vs 近 7 天同时段均值的涨跌百分比；样本不足时为 nil。
+    private var todayDelta: Double? {
+        let history = model.history
+        guard history.dayCount >= 8 else { return nil }
+        let today = history.dayCount - 1
+        let avg = (1 ... 7).reduce(0) {
+            $0 + history.dayTotalUpToHour(today - $1, currentHour)
+        } / 7
+        guard avg > 0 else { return nil }
+        return (Double(todaySoFar) - Double(avg)) / Double(avg) * 100
+    }
+
+    private var currentHour: Int {
+        Calendar.current.component(.hour, from: Date())
+    }
+
+    // MARK: 燃尽预测
+
+    @ViewBuilder private var burn: some View {
+        if let worst = worstBurn {
+            let urgent = worst.timeToExhaust < worst.resetIn * 0.5
+            Label {
+                Text("\(worst.name) \(windowWord)约 "
+                    + relativeText(Date().addingTimeInterval(worst.timeToExhaust))
+                    + " 后见底")
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8.5))
+            }
+            .foregroundStyle(urgent ? Self.urgentColor : Self.warnColor)
+            .help("按本窗口当前的消耗速度线性外推")
+        } else if hasWindowData {
+            Label {
+                Text("额度够用到重置")
+            } icon: {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 8.5))
+            }
+            .foregroundStyle(Self.safeColor)
+            .help("按当前消耗速度，本窗口额度够撑到重置")
+        }
+    }
+
+    private var windowWord: String {
+        model.quotaWindow == .weekly ? "周额度" : "5h 额度"
+    }
+
+    private var hasWindowData: Bool {
+        burnWindow(model.claude) != nil || burnWindow(model.codex) != nil
+    }
+
+    private func burnWindow(_ state: ProviderState) -> UsageWindow? {
+        model.quotaWindow == .weekly ? state.weekly : state.fiveHour
+    }
+
+    /// 会提前见底的供应商里，挑最早见底的那个；都安全则为 nil。
+    private var worstBurn: BurnEstimate? {
+        [burnEstimate(model.claude), burnEstimate(model.codex)]
+            .compactMap { $0 }
+            .filter { $0.exhaustsBeforeReset }
+            .min { $0.timeToExhaust < $1.timeToExhaust }
+    }
+
+    /// 按当前窗口里的消耗速度，线性外推这一供应商何时触顶。
+    private func burnEstimate(_ state: ProviderState) -> BurnEstimate? {
+        guard let window = burnWindow(state), let resetAt = window.resetAt else { return nil }
+        let windowLength: TimeInterval = model.quotaWindow == .weekly ? 7 * 86400 : 5 * 3600
+        let now = Date()
+        let resetIn = resetAt.timeIntervalSince(now)
+        guard resetIn > 0 else { return nil }                       // 数据过期
+        let elapsed = windowLength - resetIn
+        guard elapsed > max(60, windowLength * 0.06) else { return nil } // 窗口刚开，样本太少
+        let percent = window.percent
+        guard percent > 0 else {
+            return BurnEstimate(name: state.name, timeToExhaust: .infinity,
+                                resetIn: resetIn, exhaustsBeforeReset: false)
+        }
+        let rate = percent / elapsed                                // 每秒消耗的百分比
+        let timeToExhaust = max(0, (100 - percent) / rate)
+        return BurnEstimate(name: state.name, timeToExhaust: timeToExhaust,
+                            resetIn: resetIn, exhaustsBeforeReset: timeToExhaust < resetIn)
     }
 }
 
