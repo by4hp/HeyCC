@@ -1,4 +1,4 @@
-# codexbar-mini
+# Nibbi
 
 把 **Claude Code** 与 **Codex** 的用量额度塞进 macOS 菜单栏的小工具。一眼看到两边的 5 小时额度还剩多少，不用切到终端敲 `/status`，也不用翻网页。
 
@@ -37,13 +37,13 @@
 git clone https://github.com/by4hp/codexbar-mini.git
 cd codexbar-mini
 ./build.sh
-open CodexBar.app
+open Nibbi.app
 ```
 
 装进「应用程序」：
 
 ```bash
-cp -r CodexBar.app /Applications/ && open /Applications/CodexBar.app
+cp -r Nibbi.app /Applications/ && open /Applications/Nibbi.app
 ```
 
 App 没有 Dock 图标，只待在菜单栏。
@@ -55,7 +55,7 @@ App 没有 Dock 图标，只待在菜单栏。
 1. 到 [DeepSeek 开放平台](https://platform.deepseek.com/api_keys) 申请一个 API Key。
 2. 把 Key 填进去，两种方式任选其一：
    - 点菜单栏图标 →「设置…」→ 填入 DeepSeek API Key（推荐）；
-   - 或直接编辑 `~/.dee_codexbar/config.json`（首次运行 App 会自动生成模板）的 `deepseek_api_key` 字段。
+   - 或直接编辑 `~/.nibbi/config.json`（首次运行 App 会自动生成模板）的 `deepseek_api_key` 字段。
 
 3. 文案在启动后生成一次，之后每 30 分钟刷新；点菜单里的「立即刷新」也会重新生成。
 
@@ -71,7 +71,7 @@ App 没有 Dock 图标，只待在菜单栏。
 - **称呼** —— 小精灵在俏皮总结里怎么称呼你。
 - **DeepSeek API Key** —— 填了才有俏皮总结。
 
-所有设置保存在 `~/.dee_codexbar/config.json`，也可直接手编。
+所有设置保存在 `~/.nibbi/config.json`，也可直接手编。旧版 `~/.dee_codexbar/config.json` 会在首次启动时自动迁移。
 
 ## 隐私说明
 
@@ -85,7 +85,7 @@ App 没有 Dock 图标，只待在菜单栏。
 | --- | --- |
 | `Usage.swift` | 读取凭证、拉取 Claude / Codex 官方用量接口与套餐等级 |
 | `History.swift` | 扫描本地会话日志，聚合近 13 周 token 用量（供周/月热力图） |
-| `Config.swift` | 读写 `~/.dee_codexbar/config.json`（续费日、称呼、DeepSeek Key、图表偏好） |
+| `Config.swift` | 读写 `~/.nibbi/config.json`（续费日、称呼、DeepSeek Key、图表偏好） |
 | `Subscription.swift` | 每月续费日的日期计算 |
 | `Quip.swift` | 以小精灵口吻调用 DeepSeek 生成俏皮总结 |
 | `PixelPet.swift` | 像素小精灵：精灵图、表情帧与交互动效 |

@@ -73,10 +73,10 @@ enum PetVariant: String, Sendable, CaseIterable {
     }
 }
 
-/// CodexBar 个人版的本地配置，存于 ~/.dee_codexbar/config.json。
-/// 用独立目录，避免和原版 CodexBar 的 ~/.codexbar/ 撞文件。
+/// Nibbi 的本地配置，存于 ~/.nibbi/config.json。
+/// 首次运行会从旧的 ~/.dee_codexbar/config.json 迁移，保留原有设置。
 /// 套餐等级不在这里 —— 由各家接口/凭证自动识别。
-struct CodexBarConfig: Sendable {
+struct NibbiConfig: Sendable {
     /// DeepSeek API Key，可为空字符串（空 = 关闭俏皮总结）。
     var deepseekAPIKey: String
     /// Claude 每月续费日，1...31。
@@ -95,9 +95,12 @@ struct CodexBarConfig: Sendable {
     var petVariant: PetVariant
 
     static let path = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".nibbi/config.json")
+
+    private static let legacyPath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".dee_codexbar/config.json")
 
-    static let defaults = CodexBarConfig(
+    static let defaults = NibbiConfig(
         deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
         chartProviderMode: .combined, chartRange: .week, quotaWindow: .weekly,
         petVariant: .chibiPortrait)
@@ -108,13 +111,14 @@ struct CodexBarConfig: Sendable {
     }
 
     /// 读取配置；文件缺失或字段不全时用默认值补齐，始终返回可用配置。
-    static func load() -> CodexBarConfig {
-        guard let data = try? Data(contentsOf: path),
+    static func load() -> NibbiConfig {
+        let source = FileManager.default.fileExists(atPath: path.path) ? path : legacyPath
+        guard let data = try? Data(contentsOf: source),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return defaults }
         let key = (root["deepseek_api_key"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return CodexBarConfig(
+        return NibbiConfig(
             deepseekAPIKey: key,
             claudeRenewalDay: clampDay(root["claude_renewal_day"], fallback: 3),
             codexRenewalDay: clampDay(root["codex_renewal_day"], fallback: 19),
@@ -156,7 +160,11 @@ struct CodexBarConfig: Sendable {
     /// 首次运行写出一份默认配置，方便填 Key；已存在则不动。
     static func createTemplateIfMissing() {
         guard !FileManager.default.fileExists(atPath: path.path) else { return }
-        try? defaults.save()
+        if FileManager.default.fileExists(atPath: legacyPath.path) {
+            try? load().save()
+        } else {
+            try? defaults.save()
+        }
     }
 }
 

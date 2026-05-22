@@ -1,13 +1,13 @@
 ---
 name: pet-pixel-sprite-maker
-description: Use when the user provides a person image and wants to make a CodexBar pet in selectable pixel-art styles, including base portrait generation, 3x3 interaction sprite sheets, transparent PNG frame extraction, and integration into this Swift app as a selectable pet.
+description: Use when the user provides a person image and wants to make a Nibbi pet in selectable pixel-art styles, including base portrait generation, 3x3 interaction sprite sheets, transparent PNG frame extraction, and integration into this Swift app as a selectable pet.
 ---
 
 # Pet Pixel Sprite Maker
 
 ## Overview
 
-Turn a user-provided person image into a selectable CodexBar pixel pet. The default flow is: show style choices first, generate a style-locked character, generate a 3x3 interaction sprite sheet, split it into transparent PNG frames, then wire it into the app as a new `PetVariant`.
+Turn a user-provided person image into a selectable Nibbi pixel pet. The default flow is: show style choices first, generate a style-locked character, generate a 3x3 interaction sprite sheet, split it into transparent PNG frames, then wire it into the app as a new `PetVariant`.
 
 Use the system `imagegen` skill for image generation. Use this skill for project-specific prompts, assets, frame naming, and Swift integration.
 

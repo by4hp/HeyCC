@@ -11,7 +11,7 @@ enum PetMood: Sendable {
     case critical
 }
 
-/// 像素风格的小精灵 —— CodexBar 的吉祥物。
+/// 像素风格的小精灵 —— Nibbi 的吉祥物。
 /// 暖橙色调呼应 Claude；平时浮动眨眼、偶尔冒星星；生成文案时思考，深夜打盹，额度告急时冒汗发愁。
 /// 交互：鼠标悬停会凑近放大；点一下会咧嘴笑、开心地蹦起来并四下迸星星。
 struct PixelPet: View {

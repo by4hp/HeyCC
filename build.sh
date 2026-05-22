@@ -3,16 +3,17 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "→ 编译 (release)…"
-swift build -c release
+mkdir -p .build/clang-module-cache
+CLANG_MODULE_CACHE_PATH="$(pwd)/.build/clang-module-cache" swift build -c release --disable-sandbox
 
 BIN=".build/release/codexbar"
-APP="CodexBar.app"
+APP="Nibbi.app"
 
 echo "→ 打包 $APP …"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/CodexBar"
+cp "$BIN" "$APP/Contents/MacOS/Nibbi"
 cp Info.plist "$APP/Contents/Info.plist"
 if [ -d Resources ]; then
   cp -R Resources/. "$APP/Contents/Resources/"

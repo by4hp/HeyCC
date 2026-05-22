@@ -182,7 +182,7 @@ func fetchCodexUsage() async throws -> CodexUsage {
     request.timeoutInterval = 25
     request.setValue("Bearer \(creds.accessToken)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.setValue("CodexBar", forHTTPHeaderField: "User-Agent")
+    request.setValue(AppBrand.name, forHTTPHeaderField: "User-Agent")
     if let account = creds.accountId, !account.isEmpty {
         request.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id")
     }

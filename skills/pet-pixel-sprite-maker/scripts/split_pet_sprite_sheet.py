@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Split a 3x3 chroma-key pet sprite sheet into CodexBar pet frames."""
+"""Split a 3x3 chroma-key pet sprite sheet into Nibbi pet frames."""
 
 from __future__ import annotations
 

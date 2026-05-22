@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodexBar",
+    name: "Nibbi",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(

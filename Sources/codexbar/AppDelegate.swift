@@ -1,5 +1,4 @@
 import AppKit
-import UserNotifications
 
 struct ProviderState {
     var name: String
@@ -34,12 +33,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let quipInterval: Duration = .seconds(1800)
 
     func applicationDidFinishLaunching(_: Notification) {
+        NSApp.applicationIconImage = AppBrand.logo
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateUI()
 
         // 首次运行写出配置模板，并把续费日等设置读进来。
-        CodexBarConfig.createTemplateIfMissing()
-        applyConfig(CodexBarConfig.load())
+        NibbiConfig.createTemplateIfMissing()
+        applyConfig(NibbiConfig.load())
 
         // 戳宠物 → 刷新俏皮总结。
         model.onPokePet = { [weak self] in
@@ -61,15 +61,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in await self?.askAI(context) }
         }
 
-        // 本地通知：续费临近时提醒（3 天、1 天各一次）。
-        UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .sound]) { [weak self] _, _ in
-                Task { @MainActor in self?.checkRenewalReminders() }
-            }
-
         notchController = NotchController(model: model)
         notchController?.start()
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            openSettings()
+        }
 
         Task { @MainActor in
             while !Task.isCancelled {
@@ -80,7 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             while !Task.isCancelled {
                 await scanHistory()
-                checkRenewalReminders()
                 try? await Task.sleep(for: historyInterval)
             }
         }
@@ -171,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             model.quipError = error.localizedDescription
         }
         let status = model.quip ?? model.quipError ?? "无"
-        FileHandle.standardError.write(Data("[CodexBar] 俏皮总结：\(status)\n".utf8))
+        FileHandle.standardError.write(Data("[\(AppBrand.name)] 俏皮总结：\(status)\n".utf8))
     }
 
     /// 用户点击面板元素 → 让 DeepSeek 针对那段内容回应，结果显示在小精灵气泡里。
@@ -295,6 +292,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.delegate = self
 
+        let brandItem = NSMenuItem()
+        brandItem.title = AppBrand.name
+        brandItem.image = AppBrand.menuLogo
+        brandItem.isEnabled = false
+        menu.addItem(brandItem)
+        menu.addItem(.separator())
+
         addSection(to: menu, state: model.claude)
         menu.addItem(.separator())
         addSection(to: menu, state: model.codex)
@@ -318,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(settingsItem)
 
         let quitItem = NSMenuItem(
-            title: "退出 CodexBar", action: #selector(quitClicked), keyEquivalent: "q")
+            title: "退出 \(AppBrand.name)", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -413,7 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let historyText = history.hasData
             ? "热力图 桶=\(history.buckets.count) 峰值=\(history.maxHourTotal)"
             : "热力图无数据"
-        let line = "[CodexBar] \(describe(model.claude)) | \(describe(model.codex)) | \(historyText)\n"
+        let line = "[\(AppBrand.name)] \(describe(model.claude)) | \(describe(model.codex)) | \(historyText)\n"
         FileHandle.standardError.write(Data(line.utf8))
     }
 
@@ -433,7 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             settingsController = SettingsController()
         }
         settingsController?.show(
-            config: CodexBarConfig.load(),
+            config: NibbiConfig.load(),
             claudePlan: model.claude.plan,
             codexPlan: model.codex.plan,
             onSave: { [weak self] config in
@@ -448,7 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - 配置
 
     /// 把配置里的续费日、图表偏好等设置应用到面板模型。
-    private func applyConfig(_ config: CodexBarConfig) {
+    private func applyConfig(_ config: NibbiConfig) {
         model.claudeRenewalDay = config.claudeRenewalDay
         model.codexRenewalDay = config.codexRenewalDay
         model.userName = config.userName
@@ -460,7 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 仅把图表时间范围写回配置文件（其余字段保持不变）。
     private func persistChartRange(_ range: ChartRange) {
-        var config = CodexBarConfig.load()
+        var config = NibbiConfig.load()
         guard config.chartRange != range else { return }
         config.chartRange = range
         try? config.save()
@@ -468,90 +472,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 仅把额度口径写回配置文件（其余字段保持不变）。
     private func persistQuotaWindow(_ window: QuotaWindow) {
-        var config = CodexBarConfig.load()
+        var config = NibbiConfig.load()
         guard config.quotaWindow != window else { return }
         config.quotaWindow = window
         try? config.save()
     }
 
     /// 设置保存后：应用新值并立即刷新一次俏皮总结。
-    private func handleSettingsSaved(_ config: CodexBarConfig) {
+    private func handleSettingsSaved(_ config: NibbiConfig) {
         applyConfig(config)
         updateUI()
         Task { @MainActor in await refreshQuip() }
-    }
-
-    // MARK: - 续费提醒
-
-    /// 授权可用时，检查两家续费日是否临近。
-    private func checkRenewalReminders() {
-        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
-            guard settings.authorizationStatus == .authorized
-                || settings.authorizationStatus == .provisional else { return }
-            Task { @MainActor in self?.runRenewalReminderCheck() }
-        }
-    }
-
-    /// 续费日 ≤3 天、≤1 天两个节点，每个节点各推一次本地通知。
-    private func runRenewalReminderCheck() {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let providers: [(id: String, name: String, day: Int)] = [
-            ("claude", "Claude", model.claudeRenewalDay),
-            ("codex", "Codex", model.codexRenewalDay),
-        ]
-        for provider in providers {
-            let next = Subscription(renewalDay: provider.day).nextRenewal
-            let cycle = Self.dayKey(next)
-            let days = calendar.dateComponents(
-                [.day], from: today, to: calendar.startOfDay(for: next)).day ?? 0
-            if days <= 1 {
-                fireRenewalReminder(provider: provider.id, name: provider.name,
-                                    cycle: cycle, slot: "imminent", days: days)
-            } else if days <= 3 {
-                fireRenewalReminder(provider: provider.id, name: provider.name,
-                                    cycle: cycle, slot: "early", days: days)
-            }
-        }
-    }
-
-    /// 某个续费节点若还没提醒过，就推一条通知并记下来（按续费周期去重）。
-    private func fireRenewalReminder(provider: String, name: String,
-                                     cycle: String, slot: String, days: Int) {
-        let defaults = UserDefaults.standard
-        let cycleKey = "renewalReminderCycle_\(provider)"
-        let slotsKey = "renewalReminderSlots_\(provider)"
-        // 续费周期一变（上次续费已过），旧的已提醒记录自动作废。
-        var firedSlots = defaults.string(forKey: cycleKey) == cycle
-            ? (defaults.array(forKey: slotsKey) as? [String] ?? [])
-            : []
-        guard !firedSlots.contains(slot) else { return }
-        firedSlots.append(slot)
-        defaults.set(cycle, forKey: cycleKey)
-        defaults.set(firedSlots, forKey: slotsKey)
-
-        let body: String
-        if days <= 0 {
-            body = "今天 \(name) 就续费，新额度马上到～"
-        } else if days == 1 {
-            body = "明天 \(name) 就要续费咯，今晚悠着点用～"
-        } else {
-            body = "还有 \(days) 天，\(name) 的额度就要续费啦"
-        }
-        let content = UNMutableNotificationContent()
-        content.title = "CodexBar · 续费提醒"
-        content.body = body
-        content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(
-            identifier: "renewal-\(provider)-\(cycle)-\(slot)",
-            content: content, trigger: nil))
-    }
-
-    /// yyyy-MM-dd 形式的日期键。
-    private static func dayKey(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
     }
 
     // MARK: - NSMenuDelegate
@@ -567,18 +498,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pendingMenuRebuild = false
             rebuildMenu()
         }
-    }
-}
-
-// MARK: - 通知前台展示
-
-extension AppDelegate: UNUserNotificationCenterDelegate {
-    /// 应用在前台时也照常弹出续费提醒横幅。
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
     }
 }
 

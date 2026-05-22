@@ -9,10 +9,10 @@ final class SettingsController {
     private var window: NSWindow?
 
     /// 打开设置窗口。每次都用最新配置与识别到的套餐重建内容。
-    func show(config: CodexBarConfig,
+    func show(config: NibbiConfig,
               claudePlan: String?,
               codexPlan: String?,
-              onSave: @escaping (CodexBarConfig) -> Void) {
+              onSave: @escaping (NibbiConfig) -> Void) {
         let view = SettingsView(
             config: config,
             claudePlan: claudePlan,
@@ -88,7 +88,7 @@ struct SettingsView: View {
     private let codexPlan: String?
     /// 额度口径只在悬浮面板顶部切换，设置里不暴露 —— 这里原样保留、保存时透传。
     private let quotaWindow: QuotaWindow
-    private let onSave: (CodexBarConfig) -> Void
+    private let onSave: (NibbiConfig) -> Void
     private let onClose: () -> Void
 
     private let claudeTint = Color(red: 0.85, green: 0.49, blue: 0.30)
@@ -97,10 +97,10 @@ struct SettingsView: View {
     private let chartTint = Color(red: 0.40, green: 0.52, blue: 0.92)
     private let petTint = Color(red: 0.92, green: 0.35, blue: 0.52)
 
-    init(config: CodexBarConfig,
+    init(config: NibbiConfig,
          claudePlan: String?,
          codexPlan: String?,
-         onSave: @escaping (CodexBarConfig) -> Void,
+         onSave: @escaping (NibbiConfig) -> Void,
          onClose: @escaping () -> Void) {
         _claudeDay = State(initialValue: config.claudeRenewalDay)
         _codexDay = State(initialValue: config.codexRenewalDay)
@@ -136,9 +136,17 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 13) {
-            PixelPet(pixel: 3, variant: petVariant)
+            if let logo = AppBrand.settingsLogo {
+                Image(nsImage: logo)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                PixelPet(pixel: 3, variant: petVariant)
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text("CodexBar 设置")
+                Text("\(AppBrand.name) 设置")
                     .font(.system(size: 16, weight: .semibold))
                 Text("额度看板 · 菜单栏常驻")
                     .font(.system(size: 11))
@@ -268,7 +276,7 @@ struct SettingsView: View {
             Button("取消", action: onClose)
                 .controlSize(.large)
             Button("保存") {
-                onSave(CodexBarConfig(
+                onSave(NibbiConfig(
                     deepseekAPIKey: deepseekKey.trimmingCharacters(in: .whitespacesAndNewlines),
                     claudeRenewalDay: claudeDay,
                     codexRenewalDay: codexDay,

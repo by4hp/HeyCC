@@ -50,7 +50,7 @@ enum QuipError: LocalizedError, Sendable {
 // MARK: - 调用 DeepSeek 生成俏皮文案
 
 private let quipSystemPrompt = """
-你是 CodexBar 菜单栏里的一只像素小精灵，软萌可爱、活泼黏人，是用户写代码时的小伙伴。
+你是 Nibbi 菜单栏里的一只像素小精灵，软萌可爱、活泼黏人，是用户写代码时的小伙伴。
 我会告诉你用户此刻在 Claude Code 与 Codex 上的编程额度，以及当前的日期和时间，你要回一句又萌又贴心的俏皮话。
 要求：
 - 语气软乎乎、轻松俏皮，像只会撒娇的小精灵；可爱但别肉麻、别油腻；
@@ -64,7 +64,7 @@ private let quipSystemPrompt = """
 
 /// 用户点击面板上某个元素「问」小精灵时用的系统提示。
 private let replySystemPrompt = """
-你是 CodexBar 菜单栏里的一只像素小精灵，软萌可爱、活泼黏人，是用户写代码时的小伙伴。
+你是 Nibbi 菜单栏里的一只像素小精灵，软萌可爱、活泼黏人，是用户写代码时的小伙伴。
 用户刚在面板上点了某个东西想听你说说，我会告诉你他点的是什么、对应的数据。
 你要紧扣他点的这件事，回一句又萌又贴心、带点小见解或小建议的话。
 要求：
@@ -78,7 +78,7 @@ private let replySystemPrompt = """
 
 /// 调用 deepseek-v4-flash，给定 system 与 user 消息，返回单段文案。
 private func callDeepSeek(system: String, user: String) async throws -> String {
-    guard let apiKey = CodexBarConfig.load().deepseekKeyIfPresent else {
+    guard let apiKey = NibbiConfig.load().deepseekKeyIfPresent else {
         throw QuipError.noAPIKey
     }
 
