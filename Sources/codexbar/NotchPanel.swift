@@ -54,7 +54,7 @@ enum NotchMetrics {
     static let panelWidth: CGFloat = 392
     /// 刘海下方的内容区高度（窗口总高 = 刘海高度 + 此值）。
     /// 留足空间让周/月热力图的方块足够大、能舒展铺开。
-    static let contentHeight: CGFloat = 476
+    static let contentHeight: CGFloat = 484
     static let cornerRadius: CGFloat = 24
 }
 
@@ -181,8 +181,8 @@ struct NotchPanelView: View {
 struct QuipFooter: View {
     @ObservedObject var model: PanelModel
 
-    private static let footerHeight: CGFloat = 88
-    private static let bubbleHeight: CGFloat = 60
+    private static let footerHeight: CGFloat = 96
+    private static let bubbleHeight: CGFloat = 78
 
     @State private var displayed = ""
     @State private var shown = ""
@@ -298,7 +298,7 @@ struct QuipFooter: View {
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(.white.opacity(opacity))
             .lineSpacing(3)
-            .lineLimit(2)
+            .lineLimit(3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 11)
             .padding(.vertical, 9)
