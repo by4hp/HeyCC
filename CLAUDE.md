@@ -19,5 +19,5 @@
 
 ## 网络接口轮询的边界
 
-- Claude OAuth 用量接口 `https://api.anthropic.com/api/oauth/usage`：默认 120s 一次，遇 429 已有退避（见 [AppDelegate.swift](Sources/codexbar/AppDelegate.swift) `nextAllowedRefresh`）。不要再降低这个间隔。
+- Claude OAuth 用量接口 `https://api.anthropic.com/api/oauth/usage`：默认 300s 一次，遇 429 必须完整遵守服务端 `Retry-After`（见 [AppDelegate.swift](Sources/codexbar/AppDelegate.swift) `ProviderCooldown`）。不要再降低这个间隔。
 - Codex `https://chatgpt.com/backend-api/wham/usage`：同上节奏。

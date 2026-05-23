@@ -33,9 +33,9 @@ enum UsageError: LocalizedError, Sendable {
         case let .rateLimited(who, retryAfter):
             if let retryAfter, retryAfter > 0 {
                 let secs = Int(retryAfter.rounded(.up))
-                return "\(who) 用量接口繁忙，\(secs) 秒后自动重试"
+                return "\(who) 用量查询冷却中，\(secs) 秒后自动重试"
             }
-            return "\(who) 用量接口繁忙，稍后自动重试"
+            return "\(who) 用量查询冷却中，稍后自动重试"
         case let .http(code, who): return "\(who) 请求失败（HTTP \(code)）"
         case let .badResponse(message): return message
         }
@@ -192,6 +192,8 @@ private struct ClaudeResponse: Decodable {
 
     let five_hour: Window?
     let seven_day: Window?
+    let seven_day_sonnet: Window?
+    let seven_day_opus: Window?
 }
 
 private func parseISODate(_ string: String?) -> Date? {
@@ -278,5 +280,5 @@ func fetchClaudeUsage() async throws -> ClaudeUsage {
     return ClaudeUsage(
         plan: creds.plan,
         fiveHour: toWindow(decoded.five_hour),
-        weekly: toWindow(decoded.seven_day))
+        weekly: toWindow(decoded.seven_day ?? decoded.seven_day_sonnet ?? decoded.seven_day_opus))
 }

@@ -16,6 +16,36 @@ struct ProviderState {
     }
 }
 
+private struct ProviderCooldown {
+    var nextAllowedRefresh: Date = .distantPast
+    var rateLimitStreak: Int = 0
+
+    func remaining(at now: Date = Date()) -> TimeInterval {
+        max(nextAllowedRefresh.timeIntervalSince(now), 0)
+    }
+
+    mutating func recordSuccess() {
+        nextAllowedRefresh = .distantPast
+        rateLimitStreak = 0
+    }
+
+    mutating func recordRateLimit(retryAfter: TimeInterval?,
+                                  fallbackCap: TimeInterval,
+                                  now: Date = Date()) -> TimeInterval {
+        rateLimitStreak += 1
+        let delay: TimeInterval
+        if let retryAfter, retryAfter > 0 {
+            // Retry-After is server truth. Do not cap it locally.
+            delay = retryAfter
+        } else {
+            let exp = pow(2.0, Double(rateLimitStreak - 1))
+            delay = min(60.0 * exp, fallbackCap)
+        }
+        nextAllowedRefresh = now.addingTimeInterval(delay)
+        return delay
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
@@ -30,14 +60,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuIsOpen = false
     private var pendingMenuRebuild = false
 
-    private let refreshInterval: Duration = .seconds(120)
+    private let refreshInterval: Duration = .seconds(300)  // 5 分钟自动刷一次；想立刻看可用菜单栏「立即刷新」(⌘R)
     private let historyInterval: Duration = .seconds(300)
     private let quipInterval: Duration = .seconds(1800)
 
-    // 命中 429 后的退避调度：下一次刷新最早可发生的时刻 + 连续命中次数（用于指数退避）。
-    private var nextAllowedRefresh: Date = .distantPast
-    private var rateLimitStreak: Int = 0
-    private let rateLimitBackoffCap: TimeInterval = 5 * 60  // 5 分钟（即便服务端 Retry-After 更长，本地也不超过这个上限）
+    // 命中 429 后按 provider 独立退避，避免 Claude 限流拖住 Codex。
+    private var claudeCooldown = ProviderCooldown()
+    private var codexCooldown = ProviderCooldown()
+    private let rateLimitFallbackCap: TimeInterval = 15 * 60
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.applicationIconImage = AppBrand.logo
@@ -108,72 +138,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - 刷新实时用量
 
-    func refresh(thenRefreshQuip: Bool = false, force: Bool = false) {
+    func refresh(thenRefreshQuip: Bool = false, userInitiated: Bool = false) {
         if isRefreshing { return }
-        // 退避未到点时跳过本次自动刷新；手动「立即刷新」走 force=true 可绕过。
-        if !force, Date() < nextAllowedRefresh {
-            return
-        }
+        let now = Date()
+        let shouldFetchClaude = claudeCooldown.remaining(at: now) <= 0
+        let shouldFetchCodex = codexCooldown.remaining(at: now) <= 0
+        if !shouldFetchClaude, !shouldFetchCodex, !userInitiated { return }
         isRefreshing = true
         Task { @MainActor in
-            async let claudeResult = fetchClaudeUsage()
-            async let codexResult = fetchCodexUsage()
+            let claudeTask: Task<Result<ClaudeUsage, Error>, Never>? = shouldFetchClaude
+                ? Task { await captureResult { try await fetchClaudeUsage() } }
+                : nil
+            let codexTask: Task<Result<CodexUsage, Error>, Never>? = shouldFetchCodex
+                ? Task { await captureResult { try await fetchCodexUsage() } }
+                : nil
 
-            var hitRateLimit = false
-            var maxRetryAfter: TimeInterval = 0
-
-            do {
-                let usage = try await claudeResult
-                model.claude = ProviderState(
-                    name: "Claude Code", prefix: "Cl", plan: usage.plan,
-                    fiveHour: usage.fiveHour, weekly: usage.weekly,
-                    error: nil, isLoading: false)
-            } catch {
-                if let usageError = error as? UsageError,
-                   case let .rateLimited(_, retry) = usageError {
-                    hitRateLimit = true
-                    if let retry { maxRetryAfter = max(maxRetryAfter, retry) }
+            if let claudeTask {
+                switch await claudeTask.value {
+                case let .success(usage):
+                    claudeCooldown.recordSuccess()
+                    model.claude = ProviderState(
+                        name: "Claude Code", prefix: "Cl", plan: usage.plan,
+                        fiveHour: usage.fiveHour, weekly: usage.weekly,
+                        error: nil, isLoading: false)
+                case let .failure(error):
+                    let message = recordRateLimitIfNeeded(
+                        error,
+                        cooldown: &claudeCooldown,
+                        fallbackName: "Claude")
+                    model.claude = ProviderState(
+                        name: "Claude Code", prefix: "Cl", plan: model.claude.plan,
+                        fiveHour: model.claude.fiveHour, weekly: model.claude.weekly,
+                        error: message ?? error.localizedDescription, isLoading: false)
                 }
-                model.claude = ProviderState(
-                    name: "Claude Code", prefix: "Cl", plan: model.claude.plan,
-                    fiveHour: model.claude.fiveHour, weekly: model.claude.weekly,
-                    error: error.localizedDescription, isLoading: false)
-            }
-
-            do {
-                let usage = try await codexResult
-                model.codex = ProviderState(
-                    name: "Codex", prefix: "Cx", plan: usage.plan,
-                    fiveHour: usage.fiveHour, weekly: usage.weekly,
-                    error: nil, isLoading: false)
-            } catch {
-                if let usageError = error as? UsageError,
-                   case let .rateLimited(_, retry) = usageError {
-                    hitRateLimit = true
-                    if let retry { maxRetryAfter = max(maxRetryAfter, retry) }
-                }
-                model.codex = ProviderState(
-                    name: "Codex", prefix: "Cx", plan: model.codex.plan,
-                    fiveHour: model.codex.fiveHour, weekly: model.codex.weekly,
-                    error: error.localizedDescription, isLoading: false)
-            }
-
-            // 根据本轮结果更新退避时刻。
-            if hitRateLimit {
-                rateLimitStreak += 1
-                // Retry-After 优先；缺失时用 60s * 2^(streak-1) 指数退避。
-                // 不管哪个来源，最终都封顶到 rateLimitBackoffCap，避免被服务端要求等过久。
-                let backoff: TimeInterval
-                if maxRetryAfter > 0 {
-                    backoff = min(maxRetryAfter, rateLimitBackoffCap)
-                } else {
-                    let exp = pow(2.0, Double(rateLimitStreak - 1))
-                    backoff = min(60.0 * exp, rateLimitBackoffCap)
-                }
-                nextAllowedRefresh = Date().addingTimeInterval(backoff)
             } else {
-                rateLimitStreak = 0
-                nextAllowedRefresh = .distantPast
+                model.claude.error = cooldownMessage(
+                    "Claude", remaining: claudeCooldown.remaining())
+                model.claude.isLoading = false
+            }
+
+            if let codexTask {
+                switch await codexTask.value {
+                case let .success(usage):
+                    codexCooldown.recordSuccess()
+                    model.codex = ProviderState(
+                        name: "Codex", prefix: "Cx", plan: usage.plan,
+                        fiveHour: usage.fiveHour, weekly: usage.weekly,
+                        error: nil, isLoading: false)
+                case let .failure(error):
+                    let message = recordRateLimitIfNeeded(
+                        error,
+                        cooldown: &codexCooldown,
+                        fallbackName: "Codex")
+                    model.codex = ProviderState(
+                        name: "Codex", prefix: "Cx", plan: model.codex.plan,
+                        fiveHour: model.codex.fiveHour, weekly: model.codex.weekly,
+                        error: message ?? error.localizedDescription, isLoading: false)
+                }
+            } else {
+                model.codex.error = cooldownMessage(
+                    "Codex", remaining: codexCooldown.remaining())
+                model.codex.isLoading = false
             }
 
             model.lastUpdated = Date()
@@ -183,6 +208,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if thenRefreshQuip {
                 await refreshQuip()
             }
+        }
+    }
+
+    private func recordRateLimitIfNeeded(_ error: Error,
+                                         cooldown: inout ProviderCooldown,
+                                         fallbackName: String) -> String? {
+        guard let usageError = error as? UsageError,
+              case let .rateLimited(who, retryAfter) = usageError
+        else {
+            return nil
+        }
+        let delay = cooldown.recordRateLimit(
+            retryAfter: retryAfter,
+            fallbackCap: rateLimitFallbackCap)
+        return cooldownMessage(who.isEmpty ? fallbackName : who, remaining: delay)
+    }
+
+    private func cooldownMessage(_ who: String, remaining: TimeInterval) -> String {
+        "\(who) 用量查询冷却中，\(durationText(remaining))后自动重试"
+    }
+
+    private func durationText(_ interval: TimeInterval) -> String {
+        let seconds = max(1, Int(interval.rounded(.up)))
+        if seconds < 90 { return "\(seconds) 秒" }
+        let minutes = (seconds + 59) / 60
+        if minutes < 60 { return "\(minutes) 分钟" }
+        let hours = minutes / 60
+        let rest = minutes % 60
+        return rest > 0 ? "\(hours) 小时 \(rest) 分钟" : "\(hours) 小时"
+    }
+
+    private func captureResult<T: Sendable>(_ operation: () async throws -> T) async -> Result<T, Error> {
+        do {
+            return .success(try await operation())
+        } catch {
+            return .failure(error)
         }
     }
 
@@ -475,7 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if isRefreshing {
             Task { @MainActor in await refreshQuip() }
         } else {
-            refresh(thenRefreshQuip: true, force: true)
+            refresh(thenRefreshQuip: true, userInitiated: true)
         }
     }
 
