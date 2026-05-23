@@ -1,7 +1,7 @@
 import AppKit
 
 enum AppBrand {
-    static let name = "Nibbi"
+    static let name = "HeyCC"
 
     @MainActor static var logo: NSImage? {
         loadLogo(size: NSSize(width: 44, height: 44))
@@ -18,9 +18,9 @@ enum AppBrand {
     @MainActor
     private static func loadLogo(size: NSSize) -> NSImage? {
         let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent("Brand/nibbi-logo.png"),
+            Bundle.main.resourceURL?.appendingPathComponent("Brand/heycc-logo.png"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("Resources/Brand/nibbi-logo.png"),
+                .appendingPathComponent("Resources/Brand/heycc-logo.png"),
         ].compactMap { $0 }
 
         for url in candidates {

@@ -22,6 +22,7 @@ struct CodexUsage: Sendable {
 enum UsageError: LocalizedError, Sendable {
     case notLoggedIn(String)
     case unauthorized(String)
+    case rateLimited(String, retryAfter: TimeInterval?)
     case http(Int, String)
     case badResponse(String)
 
@@ -29,10 +30,39 @@ enum UsageError: LocalizedError, Sendable {
         switch self {
         case let .notLoggedIn(message): return message
         case let .unauthorized(message): return message
+        case let .rateLimited(who, retryAfter):
+            if let retryAfter, retryAfter > 0 {
+                let secs = Int(retryAfter.rounded(.up))
+                return "\(who) 用量接口繁忙，\(secs) 秒后自动重试"
+            }
+            return "\(who) 用量接口繁忙，稍后自动重试"
         case let .http(code, who): return "\(who) 请求失败（HTTP \(code)）"
         case let .badResponse(message): return message
         }
     }
+
+    /// 下一次刷新最早可以发生的相对延迟（仅限流时有意义）。
+    var rateLimitDelay: TimeInterval? {
+        if case let .rateLimited(_, retryAfter) = self { return retryAfter }
+        return nil
+    }
+}
+
+/// 解析 HTTP `Retry-After` 头：可能是秒数，也可能是 HTTP-date。
+private func parseRetryAfter(_ raw: String?) -> TimeInterval? {
+    guard let raw = raw?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+    if let seconds = TimeInterval(raw) {
+        return max(seconds, 0)
+    }
+    // HTTP-date 形如 "Wed, 21 Oct 2026 07:28:00 GMT"
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(identifier: "GMT")
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    if let date = formatter.date(from: raw) {
+        return max(date.timeIntervalSinceNow, 0)
+    }
+    return nil
 }
 
 // MARK: - 凭证读取
@@ -194,6 +224,10 @@ func fetchCodexUsage() async throws -> CodexUsage {
     if http.statusCode == 401 || http.statusCode == 403 {
         throw UsageError.unauthorized("Codex 登录已过期，请重新运行 codex")
     }
+    if http.statusCode == 429 {
+        let retryAfter = parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After"))
+        throw UsageError.rateLimited("Codex", retryAfter: retryAfter)
+    }
     guard (200 ..< 300).contains(http.statusCode) else {
         throw UsageError.http(http.statusCode, "Codex")
     }
@@ -227,6 +261,10 @@ func fetchClaudeUsage() async throws -> ClaudeUsage {
     }
     if http.statusCode == 401 {
         throw UsageError.unauthorized("Claude 登录已过期，请重新运行 claude")
+    }
+    if http.statusCode == 429 {
+        let retryAfter = parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After"))
+        throw UsageError.rateLimited("Claude", retryAfter: retryAfter)
     }
     guard (200 ..< 300).contains(http.statusCode) else {
         throw UsageError.http(http.statusCode, "Claude")

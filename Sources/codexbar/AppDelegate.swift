@@ -22,15 +22,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = PanelModel()
     private var notchController: NotchController?
     private var settingsController: SettingsController?
+    private let lanServer = LANServer()
+    private var lanConfig: (enabled: Bool, port: Int, token: String) = (false, 0, "")
 
     private var isRefreshing = false
     private var isQuipRefreshing = false
     private var menuIsOpen = false
     private var pendingMenuRebuild = false
 
-    private let refreshInterval: Duration = .seconds(60)
+    private let refreshInterval: Duration = .seconds(120)
     private let historyInterval: Duration = .seconds(300)
     private let quipInterval: Duration = .seconds(1800)
+
+    // 命中 429 后的退避调度：下一次刷新最早可发生的时刻 + 连续命中次数（用于指数退避）。
+    private var nextAllowedRefresh: Date = .distantPast
+    private var rateLimitStreak: Int = 0
+    private let rateLimitBackoffCap: TimeInterval = 5 * 60  // 5 分钟（即便服务端 Retry-After 更长，本地也不超过这个上限）
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.applicationIconImage = AppBrand.logo
@@ -38,8 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateUI()
 
         // 首次运行写出配置模板，并把续费日等设置读进来。
-        NibbiConfig.createTemplateIfMissing()
-        applyConfig(NibbiConfig.load())
+        HeyCCConfig.createTemplateIfMissing()
+        applyConfig(HeyCCConfig.load())
 
         // 戳宠物 → 刷新俏皮总结。
         model.onPokePet = { [weak self] in
@@ -101,12 +108,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - 刷新实时用量
 
-    func refresh(thenRefreshQuip: Bool = false) {
+    func refresh(thenRefreshQuip: Bool = false, force: Bool = false) {
         if isRefreshing { return }
+        // 退避未到点时跳过本次自动刷新；手动「立即刷新」走 force=true 可绕过。
+        if !force, Date() < nextAllowedRefresh {
+            return
+        }
         isRefreshing = true
         Task { @MainActor in
             async let claudeResult = fetchClaudeUsage()
             async let codexResult = fetchCodexUsage()
+
+            var hitRateLimit = false
+            var maxRetryAfter: TimeInterval = 0
 
             do {
                 let usage = try await claudeResult
@@ -115,6 +129,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     fiveHour: usage.fiveHour, weekly: usage.weekly,
                     error: nil, isLoading: false)
             } catch {
+                if let usageError = error as? UsageError,
+                   case let .rateLimited(_, retry) = usageError {
+                    hitRateLimit = true
+                    if let retry { maxRetryAfter = max(maxRetryAfter, retry) }
+                }
                 model.claude = ProviderState(
                     name: "Claude Code", prefix: "Cl", plan: model.claude.plan,
                     fiveHour: model.claude.fiveHour, weekly: model.claude.weekly,
@@ -128,10 +147,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     fiveHour: usage.fiveHour, weekly: usage.weekly,
                     error: nil, isLoading: false)
             } catch {
+                if let usageError = error as? UsageError,
+                   case let .rateLimited(_, retry) = usageError {
+                    hitRateLimit = true
+                    if let retry { maxRetryAfter = max(maxRetryAfter, retry) }
+                }
                 model.codex = ProviderState(
                     name: "Codex", prefix: "Cx", plan: model.codex.plan,
                     fiveHour: model.codex.fiveHour, weekly: model.codex.weekly,
                     error: error.localizedDescription, isLoading: false)
+            }
+
+            // 根据本轮结果更新退避时刻。
+            if hitRateLimit {
+                rateLimitStreak += 1
+                // Retry-After 优先；缺失时用 60s * 2^(streak-1) 指数退避。
+                // 不管哪个来源，最终都封顶到 rateLimitBackoffCap，避免被服务端要求等过久。
+                let backoff: TimeInterval
+                if maxRetryAfter > 0 {
+                    backoff = min(maxRetryAfter, rateLimitBackoffCap)
+                } else {
+                    let exp = pow(2.0, Double(rateLimitStreak - 1))
+                    backoff = min(60.0 * exp, rateLimitBackoffCap)
+                }
+                nextAllowedRefresh = Date().addingTimeInterval(backoff)
+            } else {
+                rateLimitStreak = 0
+                nextAllowedRefresh = .distantPast
             }
 
             model.lastUpdated = Date()
@@ -433,7 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if isRefreshing {
             Task { @MainActor in await refreshQuip() }
         } else {
-            refresh(thenRefreshQuip: true)
+            refresh(thenRefreshQuip: true, force: true)
         }
     }
 
@@ -442,7 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             settingsController = SettingsController()
         }
         settingsController?.show(
-            config: NibbiConfig.load(),
+            config: HeyCCConfig.load(),
             claudePlan: model.claude.plan,
             codexPlan: model.codex.plan,
             onSave: { [weak self] config in
@@ -457,7 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - 配置
 
     /// 把配置里的续费日、图表偏好等设置应用到面板模型。
-    private func applyConfig(_ config: NibbiConfig) {
+    private func applyConfig(_ config: HeyCCConfig) {
         model.claudeRenewalDay = config.claudeRenewalDay
         model.codexRenewalDay = config.codexRenewalDay
         model.userName = config.userName
@@ -466,11 +508,125 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.quotaWindow = config.quotaWindow
         model.petVariant = config.petVariant
         model.pinned = config.pinned
+        applyLANConfig(enabled: config.lanEnabled, port: config.lanPort, token: config.lanToken)
+    }
+
+    /// 根据局域网相关配置启停 server；仅当真正变化时动手。
+    private func applyLANConfig(enabled: Bool, port: Int, token: String) {
+        let next = (enabled, port, token)
+        if lanConfig == next { return }
+        lanConfig = next
+
+        if !enabled {
+            lanServer.stop()
+            return
+        }
+        // 首次启动时注入主线程快照拉取闭包（仅一次，闭包内部捕获 self、每次现读）。
+        if lanServer.snapshotProvider == nil {
+            lanServer.snapshotProvider = { [weak self] in
+                MainActor.assertIsolated()
+                return self?.makeLANSnapshot() ?? .empty
+            }
+            lanServer.onStatus = { text in
+                FileHandle.standardError.write(Data("[\(AppBrand.name)] \(text)\n".utf8))
+            }
+        }
+        lanServer.start(port: port, token: token)
+    }
+
+    /// 把面板模型 + 历史数据打包成给看板用的不可变快照。
+    private func makeLANSnapshot() -> LANSnapshot {
+        func provider(_ state: ProviderState) -> LANSnapshot.Provider {
+            LANSnapshot.Provider(
+                name: state.name,
+                plan: state.plan,
+                fiveHourPercent: state.fiveHour?.percent,
+                fiveHourResetAt: state.fiveHour?.resetAt,
+                weeklyPercent: state.weekly?.percent,
+                weeklyResetAt: state.weekly?.resetAt,
+                error: state.isLoading ? nil : state.error)
+        }
+
+        let history = model.history
+        let calendar = Calendar.current
+        let now = Date()
+
+        // 最近 24 个自然小时：双品牌分开。`[0]` 为 23 小时前，`[23]` 为当前小时。
+        var hourlyClaude = [Int](repeating: 0, count: 24)
+        var hourlyCodex = [Int](repeating: 0, count: 24)
+        if history.dayCount > 0 {
+            let today = history.dayCount - 1
+            let nowHour = calendar.component(.hour, from: now)
+            var pairs: [(claude: Int, codex: Int)] = []
+            // 先收当天的 0..nowHour
+            for h in 0 ... nowHour {
+                let bucket = history.bucket(day: today, hour: h)
+                pairs.append((bucket?.claudeTokens ?? 0, bucket?.codexTokens ?? 0))
+            }
+            // 再用昨天的尾部凑足 24
+            let need = 24 - pairs.count
+            if need > 0, today >= 1 {
+                var yesterday: [(Int, Int)] = []
+                let startHour = 24 - need
+                for h in startHour ..< 24 {
+                    let bucket = history.bucket(day: today - 1, hour: h)
+                    yesterday.append((bucket?.claudeTokens ?? 0, bucket?.codexTokens ?? 0))
+                }
+                pairs = yesterday + pairs
+            }
+            // 还不足就左侧补 0
+            if pairs.count < 24 {
+                pairs = [(Int, Int)](repeating: (0, 0), count: 24 - pairs.count) + pairs
+            }
+            let trimmed = Array(pairs.suffix(24))
+            hourlyClaude = trimmed.map(\.0)
+            hourlyCodex = trimmed.map(\.1)
+        }
+        let hourlyTotal = zip(hourlyClaude, hourlyCodex).map { $0 + $1 }
+
+        // 最近 30 天每天的双品牌总量（从历史尾部取最后 30 天，不足补 0）。
+        var dailyPoints: [LANSnapshot.DailyPoint] = []
+        if history.dayCount > 0 {
+            let want = 30
+            let firstDay = max(0, history.dayCount - want)
+            for day in firstDay ..< history.dayCount {
+                let dayStart = history.dayStart(day) ?? now
+                dailyPoints.append(LANSnapshot.DailyPoint(
+                    dayStart: dayStart,
+                    claudeTokens: history.dayClaude(day),
+                    codexTokens: history.dayCodex(day)))
+            }
+            // 不足 30 天的，在前面补空日；让前端能稳定渲染 30 个柱子。
+            while dailyPoints.count < want, let oldest = dailyPoints.first {
+                guard let prev = calendar.date(byAdding: .day, value: -1, to: oldest.dayStart) else { break }
+                dailyPoints.insert(LANSnapshot.DailyPoint(
+                    dayStart: prev, claudeTokens: 0, codexTokens: 0), at: 0)
+            }
+        }
+
+        // 网页端按可用位图走：蓝发大头用 blue_chibi，其余（mascot/卡通大头）兜底走 chibi。
+        let webPet: String = (model.petVariant == .blueChibiPortrait) ? "blue_chibi" : "chibi"
+
+        return LANSnapshot(
+            claude: provider(model.claude),
+            codex: provider(model.codex),
+            quip: model.quip,
+            hourlyTokens: hourlyTotal,
+            hourlyClaudeTokens: hourlyClaude,
+            hourlyCodexTokens: hourlyCodex,
+            dailyPoints: dailyPoints,
+            todayTokens: history.todayTotal,
+            weekTokens: history.lastWeekTotal,
+            lastUpdated: model.lastUpdated,
+            generatedAt: Date(),
+            claudeRenewalDay: model.claudeRenewalDay,
+            codexRenewalDay: model.codexRenewalDay,
+            petVariant: webPet)
     }
 
     /// 仅把图表时间范围写回配置文件（其余字段保持不变）。
     private func persistChartRange(_ range: ChartRange) {
-        var config = NibbiConfig.load()
+        var config = HeyCCConfig.load()
         guard config.chartRange != range else { return }
         config.chartRange = range
         try? config.save()
@@ -478,7 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 仅把固定显示开关写回配置文件（其余字段保持不变）。
     private func persistPinned(_ pinned: Bool) {
-        var config = NibbiConfig.load()
+        var config = HeyCCConfig.load()
         guard config.pinned != pinned else { return }
         config.pinned = pinned
         try? config.save()
@@ -486,18 +642,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 仅把额度口径写回配置文件（其余字段保持不变）。
     private func persistQuotaWindow(_ window: QuotaWindow) {
-        var config = NibbiConfig.load()
+        var config = HeyCCConfig.load()
         guard config.quotaWindow != window else { return }
         config.quotaWindow = window
         try? config.save()
     }
 
-    /// 设置保存后：应用新值并立即刷新一次俏皮总结。
-    private func handleSettingsSaved(_ config: NibbiConfig) {
+    /// 设置即时保存后：应用新值。
+    /// 设置面板现在每改一项就调一次 onSave —— 这里要避免每次都重打 DeepSeek。
+    /// 仅当 deepseekKey 或 userName 真正变化时才刷新俏皮总结。
+    private func handleSettingsSaved(_ config: HeyCCConfig) {
+        let prev = lastSavedConfig
+        lastSavedConfig = config
         applyConfig(config)
         updateUI()
-        Task { @MainActor in await refreshQuip() }
+        let keyChanged = prev?.deepseekAPIKey != config.deepseekAPIKey
+        let nameChanged = prev?.userName != config.userName
+        if prev != nil, keyChanged || nameChanged {
+            Task { @MainActor in await refreshQuip() }
+        }
     }
+
+    /// 上一次保存的配置 —— 用来判断哪些字段真的变了。
+    private var lastSavedConfig: HeyCCConfig?
 
     // MARK: - NSMenuDelegate
 

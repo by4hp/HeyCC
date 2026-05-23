@@ -7,13 +7,13 @@ mkdir -p .build/clang-module-cache
 CLANG_MODULE_CACHE_PATH="$(pwd)/.build/clang-module-cache" swift build -c release --disable-sandbox
 
 BIN=".build/release/codexbar"
-APP="Nibbi.app"
+APP="HeyCC.app"
 
 echo "→ 打包 $APP …"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Nibbi"
+cp "$BIN" "$APP/Contents/MacOS/HeyCC"
 cp Info.plist "$APP/Contents/Info.plist"
 if [ -d Resources ]; then
   cp -R Resources/. "$APP/Contents/Resources/"

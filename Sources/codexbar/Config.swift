@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// 悬浮窗图表里 Claude 与 Codex 用量的区分方式。
 enum ChartProviderMode: String, Sendable, CaseIterable {
@@ -69,10 +70,10 @@ enum PetVariant: String, Sendable, CaseIterable {
     }
 }
 
-/// Nibbi 的本地配置，存于 ~/.nibbi/config.json。
-/// 首次运行会从旧的 ~/.dee_codexbar/config.json 迁移，保留原有设置。
+/// HeyCC 的本地配置，存于 ~/.heycc/config.json。
+/// 首次运行会按 .heycc → .nibbi → .dee_codexbar 顺序找已有配置并继承，保留原有设置。
 /// 套餐等级不在这里 —— 由各家接口/凭证自动识别。
-struct NibbiConfig: Sendable {
+struct HeyCCConfig: Sendable {
     /// DeepSeek API Key，可为空字符串（空 = 关闭俏皮总结）。
     var deepseekAPIKey: String
     /// Claude 每月续费日，1...31。
@@ -91,17 +92,28 @@ struct NibbiConfig: Sendable {
     var petVariant: PetVariant
     /// 是否固定显示悬浮面板（常驻、不随鼠标悬停收起）。
     var pinned: Bool
+    /// 是否开启局域网用量看板（http://<本机 IP>:lanPort/?t=lanToken）。
+    var lanEnabled: Bool
+    /// 局域网看板监听端口，1024...65535。
+    var lanPort: Int
+    /// 局域网看板的访问令牌（URL ?t= 参数）；首次启动自动生成。
+    var lanToken: String
 
     static let path = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".nibbi/config.json")
+        .appendingPathComponent(".heycc/config.json")
 
-    private static let legacyPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".dee_codexbar/config.json")
+    private static let legacyPaths: [URL] = [
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".nibbi/config.json"),
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".dee_codexbar/config.json"),
+    ]
 
-    static let defaults = NibbiConfig(
+    static let defaults = HeyCCConfig(
         deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
         chartProviderMode: .combined, chartRange: .week, quotaWindow: .weekly,
-        petVariant: .mascot, pinned: false)
+        petVariant: .mascot, pinned: false,
+        lanEnabled: false, lanPort: 8723, lanToken: generateLANToken())
 
     /// API Key 非空时返回，否则 nil。
     var deepseekKeyIfPresent: String? {
@@ -109,14 +121,17 @@ struct NibbiConfig: Sendable {
     }
 
     /// 读取配置；文件缺失或字段不全时用默认值补齐，始终返回可用配置。
-    static func load() -> NibbiConfig {
-        let source = FileManager.default.fileExists(atPath: path.path) ? path : legacyPath
+    static func load() -> HeyCCConfig {
+        let candidates = [path] + legacyPaths
+        let source = candidates.first { FileManager.default.fileExists(atPath: $0.path) } ?? path
         guard let data = try? Data(contentsOf: source),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return defaults }
         let key = (root["deepseek_api_key"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return NibbiConfig(
+        let storedToken = (root["lan_token"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return HeyCCConfig(
             deepseekAPIKey: key,
             claudeRenewalDay: clampDay(root["claude_renewal_day"], fallback: 3),
             codexRenewalDay: clampDay(root["codex_renewal_day"], fallback: 19),
@@ -127,7 +142,10 @@ struct NibbiConfig: Sendable {
             chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week,
             quotaWindow: QuotaWindow(rawValue: root["quota_window"] as? String ?? "") ?? .weekly,
             petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .mascot,
-            pinned: root["pinned"] as? Bool ?? false)
+            pinned: root["pinned"] as? Bool ?? false,
+            lanEnabled: root["lan_enabled"] as? Bool ?? false,
+            lanPort: clampPort(root["lan_port"], fallback: 8723),
+            lanToken: storedToken.isEmpty ? generateLANToken() : storedToken)
     }
 
     /// 写回配置文件（带中文说明字段）。
@@ -141,7 +159,9 @@ struct NibbiConfig: Sendable {
                 + "chart_range 是图表默认时间范围（week/month）；"
                 + "quota_window 是悬浮弹窗额度口径（five_hour/weekly）；"
                 + "pet_variant 是底部像素宠物形象（mascot/blue_chibi_portrait）；"
-                + "pinned 是否固定显示悬浮面板（true/false）。"
+                + "pinned 是否固定显示悬浮面板（true/false）；"
+                + "lan_enabled 是否开启局域网用量看板（true/false，默认关）；"
+                + "lan_port 看板监听端口（默认 8723）；lan_token 看板访问令牌（URL ?t= 参数）。"
                 + "也可在 App 菜单的「设置」里改。套餐等级由接口自动识别，无需配置。",
             "deepseek_api_key": deepseekAPIKey,
             "claude_renewal_day": claudeRenewalDay,
@@ -152,6 +172,9 @@ struct NibbiConfig: Sendable {
             "quota_window": quotaWindow.rawValue,
             "pet_variant": petVariant.rawValue,
             "pinned": pinned,
+            "lan_enabled": lanEnabled,
+            "lan_port": lanPort,
+            "lan_token": lanToken,
         ]
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
@@ -161,7 +184,7 @@ struct NibbiConfig: Sendable {
     /// 首次运行写出一份默认配置，方便填 Key；已存在则不动。
     static func createTemplateIfMissing() {
         guard !FileManager.default.fileExists(atPath: path.path) else { return }
-        if FileManager.default.fileExists(atPath: legacyPath.path) {
+        if legacyPaths.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
             try? load().save()
         } else {
             try? defaults.save()
@@ -179,4 +202,23 @@ private func clampDay(_ value: Any?, fallback: Int) -> Int {
     default: return fallback
     }
     return min(max(day, 1), 31)
+}
+
+/// 把任意类型的端口值收敛到 1024...65535，无法解析时用 fallback。
+private func clampPort(_ value: Any?, fallback: Int) -> Int {
+    let port: Int
+    switch value {
+    case let number as NSNumber: port = number.intValue
+    case let int as Int: port = int
+    case let text as String: port = Int(text) ?? fallback
+    default: return fallback
+    }
+    return min(max(port, 1024), 65535)
+}
+
+/// 生成 12 位 hex 字符串作为局域网看板的访问令牌。
+func generateLANToken() -> String {
+    var bytes = [UInt8](repeating: 0, count: 6)
+    _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    return bytes.map { String(format: "%02x", $0) }.joined()
 }

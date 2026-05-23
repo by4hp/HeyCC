@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Nibbi",
+    name: "HeyCC",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
