@@ -112,7 +112,7 @@ func renderMobilePage(_ s: LANSnapshot, token: String) -> String {
       let snapshot = JSON.parse(document.getElementById('snapshot').textContent);
 
       // === 小精灵状态机 ===
-      const PET_VARIANT = (snapshot.petVariant === 'flower') ? 'flower' : 'chibi';
+      const PET_VARIANT = (snapshot.petVariant === 'blue_chibi') ? 'blue_chibi' : 'chibi';
       const PET_FRAMES = ['idle','blink','look_left','look_right','happy','thinking','worried','sleepy','celebrate'];
       const petImg = document.getElementById('pet');
       // 预加载所有帧（浏览器缓存命中 24h，第二次以后零延迟）

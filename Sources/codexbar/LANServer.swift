@@ -48,7 +48,7 @@ struct LANSnapshot: Sendable {
     var claudeRenewalDay: Int
     /// Codex 每月续费日。
     var codexRenewalDay: Int
-    /// 网页端用的小精灵形象 —— 只能是 "chibi" / "flower"（与 `Resources/Pets/` 子目录对应）。
+    /// 网页端用的小精灵形象 —— 只能是 "blue_chibi" / "chibi"（与 `Resources/Pets/<x>_pet_frames/` 对应）。
     var petVariant: String
 
     static let empty = LANSnapshot(
@@ -273,7 +273,7 @@ final class LANServer: @unchecked Sendable {
         }
         let variant = String(parts[0])
         let frame = String(parts[1].dropLast(4))
-        let allowedVariants: Set<String> = ["chibi", "flower"]
+        let allowedVariants: Set<String> = ["blue_chibi", "chibi"]
         let allowedFrames: Set<String> = [
             "idle", "blink", "look_left", "look_right",
             "happy", "thinking", "worried", "sleepy", "celebrate",
