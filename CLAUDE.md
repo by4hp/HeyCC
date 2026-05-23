@@ -16,6 +16,7 @@
 - 不要 `cp -r HeyCC.app /Applications/`（用户自己控制何时上线）
 - 不要 kill 正在运行的 HeyCC 进程
 - 不要 `git commit` / `git push`（用户口头说"提交"再做）
+- 工作区里如果出现 `PetVariant` 新增 case 或 `Resources/Pets/` 下新目录这类"未上线的本地试验"改动，**不要** `git add`、也不要把它写进 commit 里——默认用 `git restore` 清掉再继续做其他事；要保留就只放在工作区，永远别进 git
 
 ## 网络接口轮询的边界
 
