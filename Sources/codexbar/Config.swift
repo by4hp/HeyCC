@@ -59,16 +59,12 @@ enum QuotaWindow: String, Sendable, CaseIterable {
 /// 面板底部可选的像素宠物样式。
 enum PetVariant: String, Sendable, CaseIterable {
     case mascot
-    case flowerPortrait = "flower_portrait"
-    case chibiPortrait = "chibi_portrait"
-    case opossum
+    case blueChibiPortrait = "blue_chibi_portrait"
 
     var displayName: String {
         switch self {
         case .mascot: return "小精灵"
-        case .flowerPortrait: return "花间像素人"
-        case .chibiPortrait: return "卡通大头"
-        case .opossum: return "负鼠"
+        case .blueChibiPortrait: return "蓝发大头"
         }
     }
 }
@@ -105,7 +101,7 @@ struct NibbiConfig: Sendable {
     static let defaults = NibbiConfig(
         deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
         chartProviderMode: .combined, chartRange: .week, quotaWindow: .weekly,
-        petVariant: .chibiPortrait, pinned: false)
+        petVariant: .mascot, pinned: false)
 
     /// API Key 非空时返回，否则 nil。
     var deepseekKeyIfPresent: String? {
@@ -130,7 +126,7 @@ struct NibbiConfig: Sendable {
                 ?? .combined,
             chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week,
             quotaWindow: QuotaWindow(rawValue: root["quota_window"] as? String ?? "") ?? .weekly,
-            petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .chibiPortrait,
+            petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .mascot,
             pinned: root["pinned"] as? Bool ?? false)
     }
 
@@ -144,7 +140,7 @@ struct NibbiConfig: Sendable {
                 + "chart_provider_mode 是图表区分方式（combined/toggle）；"
                 + "chart_range 是图表默认时间范围（week/month）；"
                 + "quota_window 是悬浮弹窗额度口径（five_hour/weekly）；"
-                + "pet_variant 是底部像素宠物形象（mascot/flower_portrait/chibi_portrait/opossum）；"
+                + "pet_variant 是底部像素宠物形象（mascot/blue_chibi_portrait）；"
                 + "pinned 是否固定显示悬浮面板（true/false）。"
                 + "也可在 App 菜单的「设置」里改。套餐等级由接口自动识别，无需配置。",
             "deepseek_api_key": deepseekAPIKey,
