@@ -730,7 +730,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 设置即时保存后：应用新值。
     /// 设置面板现在每改一项就调一次 onSave —— 这里要避免每次都重打 DeepSeek。
-    /// 仅当 deepseekKey 或 userName 真正变化时才刷新俏皮总结。
+    /// 仅当 deepseekKey / userName / 界面语言真正变化时才刷新俏皮总结
+    /// （切语言时重生一句新语言的俏皮话，别让气泡停留在旧语言）。
     private func handleSettingsSaved(_ config: HeyCCConfig) {
         let prev = lastSavedConfig
         lastSavedConfig = config
@@ -738,7 +739,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateUI()
         let keyChanged = prev?.deepseekAPIKey != config.deepseekAPIKey
         let nameChanged = prev?.userName != config.userName
-        if prev != nil, keyChanged || nameChanged {
+        let languageChanged = prev?.language != config.language
+        if prev != nil, keyChanged || nameChanged || languageChanged {
             Task { @MainActor in await refreshQuip() }
         }
     }

@@ -188,11 +188,7 @@ struct SettingsView: View {
         .onChange(of: lanToken) { _ in scheduleSave() }
         .onChange(of: userName) { _ in scheduleSave() }
         .onChange(of: deepseekKey) { _ in scheduleSave() }
-        .onChange(of: language) { newValue in
-            // 立刻切全局语言，这次 @State 变更触发的重绘就会读到新语言；再防抖写回。
-            appLanguage = newValue
-            scheduleSave()
-        }
+        // 语言切换在按钮动作里已同步切全局 + 立即 saveNow，无需再挂 onChange。
         .onDisappear { pendingSaveTask?.cancel() }
     }
 
@@ -343,7 +339,14 @@ struct SettingsView: View {
             ForEach(AppLanguage.allCases, id: \.self) { lang in
                 let isSelected = language == lang
                 Button {
+                    guard language != lang else { return }
+                    // 关键：先同步切换全局语言，再改 @State 触发重绘 ——
+                    // 这样这次重绘的 body 一定读到新语言（不能依赖 onChange 的执行时机）。
+                    appLanguage = lang
                     language = lang
+                    // 语言立即写回并应用：菜单/刘海面板同步切换，不走 350ms 防抖。
+                    pendingSaveTask?.cancel()
+                    saveNow()
                 } label: {
                     Text(lang == .zh ? "中" : "EN")
                         .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
