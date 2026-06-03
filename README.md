@@ -7,11 +7,11 @@ A tiny macOS menu bar tool that puts the usage quotas of **Claude Code** and **C
 > A trimmed-down personal build. Inspiration and the Claude / Codex brand icons come from [steipete/CodexBar](https://github.com/steipete/CodexBar).
 
 <p align="center">
-  <img src="docs/panel.png" width="332" alt="Notch hover panel">
+  <img src="docs/demo.gif" width="620" alt="HeyCC in action">
 </p>
 
 <p align="center">
-  <img src="docs/notch.png" width="620" alt="Panel expanding from the notch">
+  <img src="docs/panel-en.png" width="332" alt="Notch hover panel">
 </p>
 
 <p align="center"><sub>Move the cursor over the notch and the panel slides down — quota, renewal countdown, a weekly/monthly usage heatmap, plus a pixel sprite at the bottom that drops witty one-liners</sub></p>
