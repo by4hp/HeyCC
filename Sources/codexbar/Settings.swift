@@ -80,9 +80,9 @@ private enum SettingsTab: Hashable, CaseIterable {
 
     var label: String {
         switch self {
-        case .general: return "常规"
-        case .ai: return "AI 小精灵"
-        case .lan: return "局域网看板"
+        case .general: return L("常规", "General")
+        case .ai: return L("AI 小精灵", "AI Sprite")
+        case .lan: return L("局域网看板", "LAN Dashboard")
         }
     }
 
@@ -109,6 +109,7 @@ struct SettingsView: View {
     @State private var lanEnabled: Bool
     @State private var lanPort: Int
     @State private var lanToken: String
+    @State private var language: AppLanguage
 
     private let claudePlan: String?
     private let codexPlan: String?
@@ -140,6 +141,7 @@ struct SettingsView: View {
         _lanEnabled = State(initialValue: config.lanEnabled)
         _lanPort = State(initialValue: config.lanPort)
         _lanToken = State(initialValue: config.lanToken)
+        _language = State(initialValue: config.language)
         self.quotaWindow = config.quotaWindow
         self.pinned = config.pinned
         self.claudePlan = claudePlan
@@ -186,6 +188,11 @@ struct SettingsView: View {
         .onChange(of: lanToken) { _ in scheduleSave() }
         .onChange(of: userName) { _ in scheduleSave() }
         .onChange(of: deepseekKey) { _ in scheduleSave() }
+        .onChange(of: language) { newValue in
+            // 立刻切全局语言，这次 @State 变更触发的重绘就会读到新语言；再防抖写回。
+            appLanguage = newValue
+            scheduleSave()
+        }
         .onDisappear { pendingSaveTask?.cancel() }
     }
 
@@ -212,7 +219,8 @@ struct SettingsView: View {
             pinned: pinned,
             lanEnabled: lanEnabled,
             lanPort: max(1024, min(65535, lanPort)),
-            lanToken: lanToken))
+            lanToken: lanToken,
+            language: language))
     }
 
     private var tabPicker: some View {
@@ -298,17 +306,19 @@ struct SettingsView: View {
                 PixelPet(pixel: 3, variant: petVariant)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("设置")
+                Text(L("设置", "Settings"))
                     .font(.system(size: 20, weight: .semibold))
-                Text("\(AppBrand.name) · 额度、AI 小精灵与局域网看板")
+                Text("\(AppBrand.name) · " + L("额度、AI 小精灵与局域网看板",
+                                                "quota, AI sprite & LAN dashboard"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            languageToggle
             HStack(spacing: 5) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 11, weight: .semibold))
-                Text("本机保存")
+                Text(L("本机保存", "Saved locally"))
                     .font(.system(size: 11, weight: .medium))
             }
             .foregroundStyle(Color.secondary)
@@ -327,12 +337,44 @@ struct SettingsView: View {
                 .strokeBorder(Color.primary.opacity(0.065), lineWidth: 0.5))
     }
 
+    /// 头部右侧的语言切换：中 / EN 胶囊分段控件，切换即时生效。
+    private var languageToggle: some View {
+        HStack(spacing: 2) {
+            ForEach(AppLanguage.allCases, id: \.self) { lang in
+                let isSelected = language == lang
+                Button {
+                    language = lang
+                } label: {
+                    Text(lang == .zh ? "中" : "EN")
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .frame(minWidth: 24)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(isSelected ? Color(nsColor: .controlBackgroundColor) : Color.clear))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.05)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+        .help(L("界面语言", "Interface language"))
+    }
+
     // MARK: 各分区
 
     /// 订阅套餐 + 续费日合并：同一行展示「图标 · 名字 · 套餐 · 续费日按钮」。
     private var providerSection: some View {
-        section("订阅套餐",
-                footnote: "套餐由接口自动识别；点右侧「X 号」按钮可改续费日。") {
+        section(L("订阅套餐", "Subscription"),
+                footnote: L("套餐由接口自动识别；点右侧「X 号」按钮可改续费日。",
+                            "Plan is detected automatically; tap the day button to set the renewal day.")) {
             providerRow(
                 name: "Claude Code", plan: claudePlan,
                 day: $claudeDay, showCalendar: $showClaudeCalendar,
@@ -353,7 +395,7 @@ struct SettingsView: View {
             Text(name)
                 .font(.system(size: 13, weight: .medium))
             Spacer()
-            Text((plan?.isEmpty == false) ? plan!.capitalized : "识别中…")
+            Text((plan?.isEmpty == false) ? plan!.capitalized : L("识别中…", "Detecting…"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .padding(.trailing, 6)
@@ -369,7 +411,7 @@ struct SettingsView: View {
             show.wrappedValue.toggle()
         } label: {
             HStack(spacing: 4) {
-                Text("\(day.wrappedValue) 号")
+                Text(L("\(day.wrappedValue) 号", "Day \(day.wrappedValue)"))
                     .font(.system(size: 12, weight: .semibold))
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 9, weight: .semibold))
@@ -393,9 +435,10 @@ struct SettingsView: View {
     }
 
     private var chartSection: some View {
-        section("悬浮窗图表",
-                footnote: "时间范围也可在图表顶部直接切换。") {
-            row(icon: "chart.bar.xaxis", tint: chartTint, title: "Claude / Codex 区分") {
+        section(L("悬浮窗图表", "Panel chart"),
+                footnote: L("时间范围也可在图表顶部直接切换。",
+                            "The time range can also be switched at the top of the chart.")) {
+            row(icon: "chart.bar.xaxis", tint: chartTint, title: L("Claude / Codex 区分", "Claude / Codex split")) {
                 Picker("", selection: $chartMode) {
                     ForEach(ChartProviderMode.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode)
@@ -406,10 +449,10 @@ struct SettingsView: View {
                 .controlSize(.small)
             }
             rowDivider
-            row(icon: "calendar", tint: chartTint, title: "默认时间范围") {
+            row(icon: "calendar", tint: chartTint, title: L("默认时间范围", "Default range")) {
                 Picker("", selection: $chartRange) {
-                    Text("最近 7 天").tag(ChartRange.week)
-                    Text("最近三个月").tag(ChartRange.month)
+                    Text(L("最近 7 天", "Last 7 days")).tag(ChartRange.week)
+                    Text(L("最近三个月", "Last 3 months")).tag(ChartRange.month)
                 }
                 .labelsHidden()
                 .frame(width: 130)
@@ -419,8 +462,10 @@ struct SettingsView: View {
     }
 
     private var petSection: some View {
-        section("像素宠物", footnote: "刘海面板底部陪你看额度的小家伙。") {
-            row(icon: "pawprint.fill", tint: petTint, title: "宠物样式") {
+        section(L("像素宠物", "Pixel pet"),
+                footnote: L("刘海面板底部陪你看额度的小家伙。",
+                            "The little buddy at the bottom of the notch panel.")) {
+            row(icon: "pawprint.fill", tint: petTint, title: L("宠物样式", "Pet style")) {
                 Picker("", selection: $petVariant) {
                     ForEach(PetVariant.allCases, id: \.self) { variant in
                         Text(variant.displayName).tag(variant)
@@ -434,10 +479,11 @@ struct SettingsView: View {
     }
 
     private var quipSection: some View {
-        section("俏皮总结",
-                footnote: "面板底部那句俏皮话由 deepseek-v4-flash 生成；留空 API Key 即关闭。") {
-            row(icon: "face.smiling", tint: deepseekTint, title: "称呼") {
-                TextField("小精灵怎么称呼你", text: $userName)
+        section(L("俏皮总结", "Witty summary"),
+                footnote: L("面板底部那句俏皮话由 deepseek-v4-flash 生成；留空 API Key 即关闭。",
+                            "The line at the bottom is generated by deepseek-v4-flash; leave the API key empty to disable.")) {
+            row(icon: "face.smiling", tint: deepseekTint, title: L("称呼", "Nickname")) {
+                TextField(L("小精灵怎么称呼你", "What the sprite calls you"), text: $userName)
                     .textFieldStyle(.plain)
                     .multilineTextAlignment(.trailing)
                     .font(.system(size: 13))
@@ -459,16 +505,17 @@ struct SettingsView: View {
     // MARK: 局域网看板
 
     private var lanSection: some View {
-        section("局域网看板",
-                footnote: "同一 Wi-Fi 的 Kindle / 手机访问下面 URL 看实时用量，每 120 秒自动刷新。") {
-            row(icon: "antenna.radiowaves.left.and.right", tint: lanTint, title: "开启共享") {
+        section(L("局域网看板", "LAN dashboard"),
+                footnote: L("同一 Wi-Fi 的 Kindle / 手机访问下面 URL 看实时用量，每 120 秒自动刷新。",
+                            "A Kindle / phone on the same Wi-Fi can open the URL below for live usage, auto-refreshing every 120s.")) {
+            row(icon: "antenna.radiowaves.left.and.right", tint: lanTint, title: L("开启共享", "Enable sharing")) {
                 Toggle("", isOn: $lanEnabled)
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
             }
             rowDivider
-            row(icon: "number", tint: lanTint, title: "端口") {
+            row(icon: "number", tint: lanTint, title: L("端口", "Port")) {
                 TextField("8723", value: $lanPort, format: .number.grouping(.never))
                     .textFieldStyle(.plain)
                     .multilineTextAlignment(.trailing)
@@ -476,7 +523,7 @@ struct SettingsView: View {
                     .frame(width: 70)
             }
             rowDivider
-            row(icon: "key.fill", tint: lanTint, title: "访问令牌") {
+            row(icon: "key.fill", tint: lanTint, title: L("访问令牌", "Access token")) {
                 HStack(spacing: 6) {
                     Text(lanToken)
                         .font(.system(size: 12, design: .monospaced))
@@ -496,7 +543,7 @@ struct SettingsView: View {
                                 Circle().fill(lanTint.opacity(0.13)))
                     }
                     .buttonStyle(.plain)
-                    .help("重置令牌")
+                    .help(L("重置令牌", "Reset token"))
                 }
             }
             if lanEnabled, let url = lanURL() {
@@ -529,7 +576,7 @@ struct SettingsView: View {
                             .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("扫码或在浏览器输入")
+                Text(L("扫码或在浏览器输入", "Scan or open in a browser"))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .textCase(.uppercase)
@@ -556,7 +603,7 @@ struct SettingsView: View {
                         .fill(lanTint.opacity(0.13)))
                 .foregroundStyle(lanTint)
                 .controlSize(.small)
-                .help("复制链接")
+                .help(L("复制链接", "Copy link"))
             }
             Spacer(minLength: 0)
         }

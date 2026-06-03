@@ -40,9 +40,11 @@ struct Subscription: Sendable {
         let target = calendar.startOfDay(for: date)
         let days = calendar.dateComponents([.day], from: today, to: target).day ?? 0
         let formatter = DateFormatter()
-        formatter.dateFormat = "M月d日"
+        formatter.locale = localeForLanguage()
+        formatter.dateFormat = L("M月d日", "MMM d")
         let dateString = formatter.string(from: date)
-        if days <= 0 { return "今日续费 · " + dateString }
-        return "续费 \(dateString) · \(days) 天后"
+        if days <= 0 { return L("今日续费 · ", "Renews today · ") + dateString }
+        return L("续费 \(dateString) · \(days) 天后",
+                 "Renews \(dateString) · in \(days)d")
     }
 }

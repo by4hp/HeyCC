@@ -42,6 +42,8 @@ final class PanelModel: ObservableObject {
     var onChartRangeChanged: ((ChartRange) -> Void)?
     /// 在面板顶部切换额度口径时触发（由 AppDelegate 注入：写回配置）。
     var onQuotaWindowChanged: ((QuotaWindow) -> Void)?
+    /// 界面语言，来自配置、在「设置」里切换；变化时驱动面板整体重绘。
+    @Published var language: AppLanguage = .en
     /// 是否固定显示面板（常驻、不随鼠标悬停收起），来自配置、可在刘海栏钉住。
     @Published var pinned = false
     /// 切换固定显示时触发（由 AppDelegate 注入：写回配置）。
@@ -136,7 +138,7 @@ struct NotchPanelView: View {
                     model.onQuotaWindowChanged?(picked)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help("切换 5 小时 / 周额度")
+                .help(L("切换 5 小时 / 周额度", "Switch 5-hour / 7-day quota"))
             Spacer()
                 .frame(width: model.notchWidth + 8)
             HStack(spacing: 5) {
@@ -145,7 +147,7 @@ struct NotchPanelView: View {
                     Text(clockText(updated))
                         .font(.system(size: 9.5).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.4))
-                        .help("上次更新时间")
+                        .help(L("上次更新时间", "Last updated"))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -169,7 +171,9 @@ struct NotchPanelView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(model.pinned ? "取消固定，面板恢复悬停显示" : "固定面板，常驻显示")
+        .help(model.pinned
+            ? L("取消固定，面板恢复悬停显示", "Unpin — panel hides on hover again")
+            : L("固定面板，常驻显示", "Pin the panel to keep it open"))
     }
 
 }
@@ -186,20 +190,31 @@ struct QuipFooter: View {
 
     @State private var displayed = ""
     @State private var shown = ""
-    @State private var loadingLine = "让我瞅瞅你今天写了多少…"
+    @State private var loadingLine = L("让我瞅瞅你今天写了多少…", "Let me peek at how much you wrote today…")
     @State private var thinkingHold = false
     @State private var thinkingTask: Task<Void, Never>?
     @State private var celebrating = false
     @State private var celebrationTask: Task<Void, Never>?
 
     /// 生成文案期间气泡里的台词 —— 由小精灵第一人称说出，别用「正在生成」这类旁白。
-    private static let loadingLines = [
-        "让我瞅瞅你今天写了多少…",
-        "唔…我看看你的额度哈…",
-        "等等，我扒拉一下数据…",
-        "我盘盘你这周的账哦…",
-        "让我眯起眼睛看看哈…",
-    ]
+    /// 跟随当前语言切换，故用计算属性而非 static let。
+    private var loadingLines: [String] {
+        appLanguage == .en
+            ? [
+                "Let me peek at how much you wrote today…",
+                "Hmm… checking your quota…",
+                "Hold on, digging through the data…",
+                "Let me tally up your week…",
+                "Squinting at the numbers…",
+            ]
+            : [
+                "让我瞅瞅你今天写了多少…",
+                "唔…我看看你的额度哈…",
+                "等等，我扒拉一下数据…",
+                "我盘盘你这周的账哦…",
+                "让我眯起眼睛看看哈…",
+            ]
+    }
 
     private enum Mode { case loading, quip, error }
     private var mode: Mode {
@@ -320,7 +335,7 @@ struct QuipFooter: View {
     private func typewriter() async {
         guard !model.quipLoading else {
             shown = ""
-            loadingLine = Self.loadingLines.randomElement() ?? loadingLine
+            loadingLine = loadingLines.randomElement() ?? loadingLine
             return
         }
         guard let quip = model.quip, !quip.isEmpty else { return }
@@ -417,17 +432,18 @@ struct ProviderRow: View {
     }
 
     private var usageLine: String {
-        if state.isLoading { return "读取中…" }
+        if state.isLoading { return L("读取中…", "Loading…") }
         if let error = state.error { return error }
         var parts: [String] = []
         if let reset = activeWindow?.resetAt {
-            parts.append((window == .weekly ? "周额度重置 " : "5h 重置 ") + relativeText(reset))
+            parts.append((window == .weekly ? L("周额度重置 ", "7d resets ") : L("5h 重置 ", "5h resets "))
+                + relativeText(reset))
         }
         if let other = otherWindow?.percent {
-            parts.append((window == .weekly ? "5h 用量 " : "周用量 ")
+            parts.append((window == .weekly ? L("5h 用量 ", "5h ") : L("周用量 ", "7d "))
                 + "\(Int(other.rounded()))%")
         }
-        return parts.isEmpty ? "暂无数据" : parts.joined(separator: "  ·  ")
+        return parts.isEmpty ? L("暂无数据", "No data") : parts.joined(separator: "  ·  ")
     }
 }
 
@@ -494,7 +510,7 @@ struct InsightStrip: View {
     private var pulse: some View {
         HStack(spacing: 4) {
             Image(systemName: "bolt.fill").font(.system(size: 8))
-            Text("今日 \(shortTokens(todaySoFar))")
+            Text(L("今日 \(shortTokens(todaySoFar))", "Today \(shortTokens(todaySoFar))"))
                 .foregroundStyle(.white.opacity(0.55))
             if let delta = todayDelta {
                 let up = delta >= 0
@@ -503,7 +519,8 @@ struct InsightStrip: View {
             }
         }
         .foregroundStyle(.white.opacity(0.4))
-        .help("今日累计用量，与近 7 天同一时段的均值相比 · 点我问问小精灵")
+        .help(L("今日累计用量，与近 7 天同一时段的均值相比 · 点我问问小精灵",
+                "Today's usage so far vs. the 7-day average at this hour · tap to ask the sprite"))
     }
 
     /// 今日截至当前小时的累计 token。
@@ -531,12 +548,15 @@ struct InsightStrip: View {
 
     /// 点击今日脉搏时抛给小精灵的话。
     private var pulseQuestion: String {
-        var s = "用户点了面板上的『今日脉搏』：今天到现在累计约 \(shortTokens(todaySoFar)) token"
+        var s = L("用户点了面板上的『今日脉搏』：今天到现在累计约 \(shortTokens(todaySoFar)) token",
+                  "The user tapped 'Today's pulse': about \(shortTokens(todaySoFar)) tokens so far today")
         if let delta = todayDelta {
             let pct = Int(abs(delta).rounded())
-            s += delta >= 0 ? "，比近 7 天同时段均值高 \(pct)%" : "，比近 7 天同时段均值低 \(pct)%"
+            s += delta >= 0
+                ? L("，比近 7 天同时段均值高 \(pct)%", ", \(pct)% above the 7-day average at this hour")
+                : L("，比近 7 天同时段均值低 \(pct)%", ", \(pct)% below the 7-day average at this hour")
         }
-        return s + "。"
+        return s + L("。", ".")
     }
 
     // MARK: 燃尽预测
@@ -545,38 +565,44 @@ struct InsightStrip: View {
         if let worst = worstBurn {
             let urgent = worst.timeToExhaust < worst.resetIn * 0.5
             Label {
-                Text("\(worst.name) \(windowWord)约 "
-                    + relativeText(Date().addingTimeInterval(worst.timeToExhaust))
-                    + " 后见底")
+                let when = relativeText(Date().addingTimeInterval(worst.timeToExhaust))
+                Text(L("\(worst.name) \(windowWord)约 \(when) 后见底",
+                       "\(worst.name) \(windowWord) runs out in ~\(when)"))
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8.5))
             }
             .foregroundStyle(urgent ? Self.urgentColor : Self.warnColor)
-            .help("按本窗口当前的消耗速度线性外推 · 点我问问小精灵")
+            .help(L("按本窗口当前的消耗速度线性外推 · 点我问问小精灵",
+                    "Linear projection from the current burn rate · tap to ask the sprite"))
         } else if hasWindowData {
             Label {
-                Text("额度够用到重置")
+                Text(L("额度够用到重置", "Enough quota until reset"))
             } icon: {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 8.5))
             }
             .foregroundStyle(Self.safeColor)
-            .help("按当前消耗速度，本窗口额度够撑到重置 · 点我问问小精灵")
+            .help(L("按当前消耗速度，本窗口额度够撑到重置 · 点我问问小精灵",
+                    "At the current burn rate this window's quota lasts until reset · tap to ask the sprite"))
         }
     }
 
     private var windowWord: String {
-        model.quotaWindow == .weekly ? "周额度" : "5h 额度"
+        model.quotaWindow == .weekly ? L("周额度", "7-day quota") : L("5h 额度", "5h quota")
     }
 
     /// 点击燃尽预测时抛给小精灵的话。
     private var burnQuestion: String {
         if let worst = worstBurn {
             let when = relativeText(Date().addingTimeInterval(worst.timeToExhaust))
-            return "用户点了面板上的『燃尽预测』：按当前消耗速度，"
-                + "\(worst.name) 的\(windowWord)大约 \(when) 后见底，会赶在重置前用完。"
+            return L("用户点了面板上的『燃尽预测』：按当前消耗速度，"
+                        + "\(worst.name) 的\(windowWord)大约 \(when) 后见底，会赶在重置前用完。",
+                     "The user tapped 'Burn estimate': at the current rate, "
+                        + "\(worst.name)'s \(windowWord) runs out in about \(when), before the reset.")
         }
-        return "用户点了面板上的『燃尽预测』：按当前消耗速度，"
-            + "Claude 和 Codex 的\(windowWord)目前都够撑到重置。"
+        return L("用户点了面板上的『燃尽预测』：按当前消耗速度，"
+                    + "Claude 和 Codex 的\(windowWord)目前都够撑到重置。",
+                 "The user tapped 'Burn estimate': at the current rate, "
+                    + "both Claude's and Codex's \(windowWord) last until reset.")
     }
 
     private var hasWindowData: Bool {
@@ -711,7 +737,9 @@ struct ChartSection: View {
 
     private var header: some View {
         HStack(spacing: 0) {
-            Text(range == .week ? "最近 7 天用量" : "最近三个月用量")
+            Text(range == .week
+                ? L("最近 7 天用量", "Last 7 days")
+                : L("最近三个月用量", "Last 3 months"))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
             Spacer()
@@ -724,7 +752,7 @@ struct ChartSection: View {
     }
 
     private var providerSelector: some View {
-        segmented([(ChartSeries.both, "合计"),
+        segmented([(ChartSeries.both, L("合计", "All")),
                    (ChartSeries.claude, "Claude"),
                    (ChartSeries.codex, "Codex")],
                   isActive: { $0 == toggleSeries }) { toggleSeries = $0 }
@@ -734,7 +762,7 @@ struct ChartSection: View {
 
     @ViewBuilder private var chartBody: some View {
         if model.history.dayCount == 0 {
-            Text("暂无用量数据")
+            Text(L("暂无用量数据", "No usage data"))
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.3))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -789,13 +817,14 @@ struct HeatCell: View {
             .overlay { hoverOutline }
             .scaleEffect(hovering ? 1.18 : 1)
             .zIndex(hovering ? 1 : 0)
-            .help(onAsk == nil ? tooltip : tooltip + " · 点我问问小精灵")
+            .help(onAsk == nil ? tooltip : tooltip + L(" · 点我问问小精灵", " · tap to ask the sprite"))
             .onHover { inside in
                 hovering = inside
                 guard onAsk != nil else { return }
                 if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
             }
-            .onTapGesture { onAsk?("用户在用量热力图上点了一格：「\(tooltip)」。") }
+            .onTapGesture { onAsk?(L("用户在用量热力图上点了一格：「\(tooltip)」。",
+                                     "The user tapped a cell on the usage heatmap: \"\(tooltip)\".")) }
             .animation(.spring(response: 0.24, dampingFraction: 0.72), value: hovering)
     }
 
@@ -830,7 +859,12 @@ struct HeatmapGrid: View {
     /// 点击格子时把它的内容抛给小精灵。
     var onAsk: ((String) -> Void)?
 
-    private static let weekdayNames = ["一", "二", "三", "四", "五", "六", "日"]
+    /// 月视图行首的星期标签（周一→周日）；跟随语言切换。
+    private var weekdayNames: [String] {
+        appLanguage == .en
+            ? ["M", "T", "W", "T", "F", "S", "S"]
+            : ["一", "二", "三", "四", "五", "六", "日"]
+    }
 
     var body: some View {
         switch range {
@@ -932,7 +966,7 @@ struct HeatmapGrid: View {
             VStack(spacing: gap) {
                 ForEach(0 ..< rows, id: \.self) { row in
                     HStack(spacing: gap) {
-                        Text(Self.weekdayNames[row])
+                        Text(weekdayNames[row])
                             .font(.system(size: 8))
                             .foregroundStyle(.white.opacity(0.45))
                             .frame(width: labelW, alignment: .leading)
@@ -1054,18 +1088,19 @@ struct HeatmapGrid: View {
     private func weekDayLabel(_ day: Int) -> String {
         guard let date = history.dayStart(day) else { return "" }
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "今天" }
-        if calendar.isDateInYesterday(date) { return "昨天" }
+        if calendar.isDateInToday(date) { return L("今天", "Today") }
+        if calendar.isDateInYesterday(date) { return L("昨天", "Yest.") }
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.locale = localeForLanguage()
         formatter.dateFormat = "EEE"
         return formatter.string(from: date)
     }
 
     private func weekTooltip(day: Int, block: Int, claude: Int, codex: Int) -> String {
         let label = weekDayLabel(day)
-        let span = String(format: "%02d–%02d 时", block * 2, block * 2 + 2)
-        guard claude + codex > 0 else { return "\(label) \(span) · 无用量" }
+        let span = L(String(format: "%02d–%02d 时", block * 2, block * 2 + 2),
+                     String(format: "%02d:00–%02d:00", block * 2, block * 2 + 2))
+        guard claude + codex > 0 else { return "\(label) \(span) · " + L("无用量", "no usage") }
         return "\(label) \(span) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
     }
 
@@ -1073,23 +1108,25 @@ struct HeatmapGrid: View {
         let dateText = history.dayStart(dayIndex).map(Self.monthDayText) ?? ""
         var line = claude + codex > 0
             ? "\(dateText) · Claude \(shortTokens(claude)) / Codex \(shortTokens(codex))"
-            : "\(dateText) · 无用量"
+            : "\(dateText) · " + L("无用量", "no usage")
         if let mark = renewalMark(forDayIndex: dayIndex) {
-            line += mark.isPast ? " · \(mark.label) 续费日" : " · \(mark.label) 下次续费"
+            line += mark.isPast
+                ? " · " + L("\(mark.label) 续费日", "\(mark.label) renewal")
+                : " · " + L("\(mark.label) 下次续费", "\(mark.label) next renewal")
         }
         return line
     }
 
     /// 未来续费格的提示，如「6月3日 · Claude 下次续费」。
     private func futureTooltip(date: Date?, mark: RenewalMark) -> String {
-        "\(date.map(Self.monthDayText) ?? "") · \(mark.label) 下次续费"
+        "\(date.map(Self.monthDayText) ?? "") · " + L("\(mark.label) 下次续费", "\(mark.label) next renewal")
     }
 
-    /// 「M月d日」中文日期文本。
+    /// 「M月d日」/「MMM d」日期文本，随语言切换。
     private static func monthDayText(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日"
+        formatter.locale = localeForLanguage()
+        formatter.dateFormat = L("M月d日", "MMM d")
         return formatter.string(from: date)
     }
 }

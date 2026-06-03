@@ -45,6 +45,7 @@ struct PixelPet: View {
     }
 
     private static let blueChibiBitmaps = loadBitmaps(subdirectory: "Pets/blue_chibi_pet_frames")
+    private static let chibiBitmaps = loadBitmaps(subdirectory: "Pets/chibi_pet_frames")
 
     private static func loadBitmaps(subdirectory: String) -> [BitmapFrame: Image] {
         var frames: [BitmapFrame: Image] = [:]
@@ -251,7 +252,7 @@ struct PixelPet: View {
             onPoke?()
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.55), value: hovering)
-        .help("戳我一下～")
+        .help(L("戳我一下～", "Poke me~"))
     }
 
     /// 某一帧时刻的整只小精灵（精灵本体 + 星星）。
@@ -387,7 +388,7 @@ struct PixelPet: View {
 
     /// 按反应/心情/眨眼挑选当前帧。
     private func currentFrame(react: Double, time: Double) -> [String] {
-        if variant == .blueChibiPortrait {
+        if variant == .blueChibiPortrait || variant == .chibiPortrait {
             return currentPortraitFrame(react: react, time: time)
         }
         if react > 0.05 { return Self.happyFrame }
@@ -428,7 +429,7 @@ struct PixelPet: View {
     }
 
     private var isBitmapPet: Bool {
-        variant == .blueChibiPortrait
+        variant == .blueChibiPortrait || variant == .chibiPortrait
     }
 
     private func bitmapImage(react: Double, time: Double) -> Image? {
@@ -436,6 +437,8 @@ struct PixelPet: View {
         switch variant {
         case .blueChibiPortrait:
             return Self.blueChibiBitmaps[frame]
+        case .chibiPortrait:
+            return Self.chibiBitmaps[frame]
         case .mascot:
             return nil
         }
@@ -443,7 +446,7 @@ struct PixelPet: View {
 
     private func bitmapWidth(box: CGFloat) -> CGFloat {
         switch variant {
-        case .blueChibiPortrait: return box
+        case .blueChibiPortrait, .chibiPortrait: return box
         case .mascot: return box
         }
     }
@@ -484,7 +487,7 @@ struct PixelPet: View {
             case "d": return Color(red: 0.56, green: 0.80, blue: 0.96)
             default: return nil
             }
-        case .blueChibiPortrait:
+        case .blueChibiPortrait, .chibiPortrait:
             switch char {
             case "k": return Color(red: 0.07, green: 0.08, blue: 0.09)
             case "h": return Color(red: 0.32, green: 0.16, blue: 0.10)

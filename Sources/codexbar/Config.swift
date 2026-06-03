@@ -11,8 +11,8 @@ enum ChartProviderMode: String, Sendable, CaseIterable {
     /// 设置面板里展示的名字。
     var displayName: String {
         switch self {
-        case .combined: return "双色合并"
-        case .toggle: return "切换显示"
+        case .combined: return L("双色合并", "Blended")
+        case .toggle: return L("切换显示", "Toggle")
         }
     }
 }
@@ -27,8 +27,8 @@ enum ChartRange: String, Sendable, CaseIterable {
     /// 图表顶部分段控件上的短名。
     var displayName: String {
         switch self {
-        case .week: return "周"
-        case .month: return "月"
+        case .week: return L("周", "W")
+        case .month: return L("月", "M")
         }
     }
 }
@@ -44,15 +44,15 @@ enum QuotaWindow: String, Sendable, CaseIterable {
     var shortName: String {
         switch self {
         case .fiveHour: return "5h"
-        case .weekly: return "周"
+        case .weekly: return L("周", "7d")
         }
     }
 
     /// 供应商行里数值旁的小标签。
     var badge: String {
         switch self {
-        case .fiveHour: return "5 小时"
-        case .weekly: return "7 天"
+        case .fiveHour: return L("5 小时", "5-hour")
+        case .weekly: return L("7 天", "7-day")
         }
     }
 }
@@ -61,11 +61,13 @@ enum QuotaWindow: String, Sendable, CaseIterable {
 enum PetVariant: String, Sendable, CaseIterable {
     case mascot
     case blueChibiPortrait = "blue_chibi_portrait"
+    case chibiPortrait = "chibi_portrait"
 
     var displayName: String {
         switch self {
-        case .mascot: return "小精灵"
-        case .blueChibiPortrait: return "蓝发大头"
+        case .mascot: return L("小精灵", "Sprite")
+        case .blueChibiPortrait: return L("蓝发大头", "Blue chibi")
+        case .chibiPortrait: return L("卡通大头", "Chibi")
         }
     }
 }
@@ -98,6 +100,8 @@ struct HeyCCConfig: Sendable {
     var lanPort: Int
     /// 局域网看板的访问令牌（URL ?t= 参数）；首次启动自动生成。
     var lanToken: String
+    /// 界面语言（zh/en），可在「设置」里切换。
+    var language: AppLanguage
 
     static let path = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".heycc/config.json")
@@ -112,8 +116,9 @@ struct HeyCCConfig: Sendable {
     static let defaults = HeyCCConfig(
         deepseekAPIKey: "", claudeRenewalDay: 3, codexRenewalDay: 19, userName: "",
         chartProviderMode: .combined, chartRange: .week, quotaWindow: .weekly,
-        petVariant: .mascot, pinned: false,
-        lanEnabled: false, lanPort: 8723, lanToken: generateLANToken())
+        petVariant: .chibiPortrait, pinned: false,
+        lanEnabled: false, lanPort: 8723, lanToken: generateLANToken(),
+        language: .en)
 
     /// API Key 非空时返回，否则 nil。
     var deepseekKeyIfPresent: String? {
@@ -141,11 +146,12 @@ struct HeyCCConfig: Sendable {
                 ?? .combined,
             chartRange: ChartRange(rawValue: root["chart_range"] as? String ?? "") ?? .week,
             quotaWindow: QuotaWindow(rawValue: root["quota_window"] as? String ?? "") ?? .weekly,
-            petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .mascot,
+            petVariant: PetVariant(rawValue: root["pet_variant"] as? String ?? "") ?? .chibiPortrait,
             pinned: root["pinned"] as? Bool ?? false,
             lanEnabled: root["lan_enabled"] as? Bool ?? false,
             lanPort: clampPort(root["lan_port"], fallback: 8723),
-            lanToken: storedToken.isEmpty ? generateLANToken() : storedToken)
+            lanToken: storedToken.isEmpty ? generateLANToken() : storedToken,
+            language: AppLanguage(rawValue: root["language"] as? String ?? "") ?? .en)
     }
 
     /// 写回配置文件（带中文说明字段）。
@@ -158,10 +164,11 @@ struct HeyCCConfig: Sendable {
                 + "chart_provider_mode 是图表区分方式（combined/toggle）；"
                 + "chart_range 是图表默认时间范围（week/month）；"
                 + "quota_window 是悬浮弹窗额度口径（five_hour/weekly）；"
-                + "pet_variant 是底部像素宠物形象（mascot/blue_chibi_portrait）；"
+                + "pet_variant 是底部像素宠物形象（mascot/blue_chibi_portrait/chibi_portrait）；"
                 + "pinned 是否固定显示悬浮面板（true/false）；"
                 + "lan_enabled 是否开启局域网用量看板（true/false，默认关）；"
-                + "lan_port 看板监听端口（默认 8723）；lan_token 看板访问令牌（URL ?t= 参数）。"
+                + "lan_port 看板监听端口（默认 8723）；lan_token 看板访问令牌（URL ?t= 参数）；"
+                + "language 界面语言（zh/en）。"
                 + "也可在 App 菜单的「设置」里改。套餐等级由接口自动识别，无需配置。",
             "deepseek_api_key": deepseekAPIKey,
             "claude_renewal_day": claudeRenewalDay,
@@ -175,6 +182,7 @@ struct HeyCCConfig: Sendable {
             "lan_enabled": lanEnabled,
             "lan_port": lanPort,
             "lan_token": lanToken,
+            "language": language.rawValue,
         ]
         let data = try JSONSerialization.data(
             withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])

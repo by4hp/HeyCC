@@ -64,19 +64,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let historyInterval: Duration = .seconds(300)
     private let quipInterval: Duration = .seconds(1800)
 
-    // 命中 429 后按 provider 独立退避，避免 Claude 限流拖住 Codex。
-    private var claudeCooldown = ProviderCooldown()
+    // Claude 的 OAuth source 与 Codex 分开退避；OAuth 冷却时 Claude 可继续走 CLI fallback。
+    private var claudeOAuthCooldown = ProviderCooldown()
     private var codexCooldown = ProviderCooldown()
     private let rateLimitFallbackCap: TimeInterval = 15 * 60
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.applicationIconImage = AppBrand.logo
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateUI()
 
-        // 首次运行写出配置模板，并把续费日等设置读进来。
+        // 首次运行写出配置模板，并把语言/续费日等设置读进来；先于首次 updateUI 以便菜单一开始就是正确语言。
         HeyCCConfig.createTemplateIfMissing()
         applyConfig(HeyCCConfig.load())
+        updateUI()
 
         // 戳宠物 → 刷新俏皮总结。
         model.onPokePet = { [weak self] in
@@ -138,43 +138,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - 刷新实时用量
 
-    func refresh(thenRefreshQuip: Bool = false, userInitiated: Bool = false) {
+    func refresh(thenRefreshQuip: Bool = false) {
         if isRefreshing { return }
         let now = Date()
-        let shouldFetchClaude = claudeCooldown.remaining(at: now) <= 0
+        let shouldFetchClaudeOAuth = claudeOAuthCooldown.remaining(at: now) <= 0
         let shouldFetchCodex = codexCooldown.remaining(at: now) <= 0
-        if !shouldFetchClaude, !shouldFetchCodex, !userInitiated { return }
         isRefreshing = true
         Task { @MainActor in
-            let claudeTask: Task<Result<ClaudeUsage, Error>, Never>? = shouldFetchClaude
-                ? Task { await captureResult { try await fetchClaudeUsage() } }
-                : nil
+            let claudeTask = Task {
+                await captureResult { try await fetchClaudeUsage(allowOAuth: shouldFetchClaudeOAuth) }
+            }
             let codexTask: Task<Result<CodexUsage, Error>, Never>? = shouldFetchCodex
                 ? Task { await captureResult { try await fetchCodexUsage() } }
                 : nil
 
-            if let claudeTask {
-                switch await claudeTask.value {
-                case let .success(usage):
-                    claudeCooldown.recordSuccess()
-                    model.claude = ProviderState(
-                        name: "Claude Code", prefix: "Cl", plan: usage.plan,
-                        fiveHour: usage.fiveHour, weekly: usage.weekly,
-                        error: nil, isLoading: false)
-                case let .failure(error):
-                    let message = recordRateLimitIfNeeded(
-                        error,
-                        cooldown: &claudeCooldown,
-                        fallbackName: "Claude")
-                    model.claude = ProviderState(
-                        name: "Claude Code", prefix: "Cl", plan: model.claude.plan,
-                        fiveHour: model.claude.fiveHour, weekly: model.claude.weekly,
-                        error: message ?? error.localizedDescription, isLoading: false)
+            switch await claudeTask.value {
+            case let .success(usage):
+                if usage.oauthWasRateLimited {
+                    _ = claudeOAuthCooldown.recordRateLimit(
+                        retryAfter: usage.oauthRetryAfter,
+                        fallbackCap: rateLimitFallbackCap)
+                } else if usage.source == .oauth {
+                    claudeOAuthCooldown.recordSuccess()
                 }
-            } else {
-                model.claude.error = cooldownMessage(
-                    "Claude", remaining: claudeCooldown.remaining())
-                model.claude.isLoading = false
+                model.claude = ProviderState(
+                    name: "Claude Code", prefix: "Cl", plan: usage.plan ?? model.claude.plan,
+                    fiveHour: preservingReset(usage.fiveHour, from: model.claude.fiveHour),
+                    weekly: preservingReset(usage.weekly, from: model.claude.weekly),
+                    error: nil, isLoading: false)
+            case let .failure(error):
+                var message = recordRateLimitIfNeeded(
+                    error,
+                    cooldown: &claudeOAuthCooldown,
+                    fallbackName: "Claude OAuth")
+                if message == nil, !shouldFetchClaudeOAuth {
+                    message = cooldownMessage(
+                        "Claude OAuth", remaining: claudeOAuthCooldown.remaining())
+                        + L("；CLI 回退失败", "; CLI fallback failed")
+                }
+                model.claude = ProviderState(
+                    name: "Claude Code", prefix: "Cl", plan: model.claude.plan,
+                    fiveHour: model.claude.fiveHour, weekly: model.claude.weekly,
+                    error: message ?? error.localizedDescription, isLoading: false)
             }
 
             if let codexTask {
@@ -211,6 +216,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func preservingReset(_ latest: UsageWindow?, from previous: UsageWindow?) -> UsageWindow? {
+        guard var latest else { return nil }
+        if latest.resetAt == nil {
+            latest.resetAt = previous?.resetAt
+        }
+        return latest
+    }
+
     private func recordRateLimitIfNeeded(_ error: Error,
                                          cooldown: inout ProviderCooldown,
                                          fallbackName: String) -> String? {
@@ -226,17 +239,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func cooldownMessage(_ who: String, remaining: TimeInterval) -> String {
-        "\(who) 用量查询冷却中，\(durationText(remaining))后自动重试"
+        L("\(who) 用量查询冷却中，\(durationText(remaining))后自动重试",
+          "\(who) usage check cooling down, auto-retry in \(durationText(remaining))")
     }
 
     private func durationText(_ interval: TimeInterval) -> String {
         let seconds = max(1, Int(interval.rounded(.up)))
-        if seconds < 90 { return "\(seconds) 秒" }
+        if seconds < 90 { return L("\(seconds) 秒", "\(seconds)s") }
         let minutes = (seconds + 59) / 60
-        if minutes < 60 { return "\(minutes) 分钟" }
+        if minutes < 60 { return L("\(minutes) 分钟", "\(minutes)m") }
         let hours = minutes / 60
         let rest = minutes % 60
-        return rest > 0 ? "\(hours) 小时 \(rest) 分钟" : "\(hours) 小时"
+        if rest > 0 { return L("\(hours) 小时 \(rest) 分钟", "\(hours)h \(rest)m") }
+        return L("\(hours) 小时", "\(hours)h")
     }
 
     private func captureResult<T: Sendable>(_ operation: () async throws -> T) async -> Result<T, Error> {
@@ -420,17 +435,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(updated)
 
         let refreshItem = NSMenuItem(
-            title: "立即刷新", action: #selector(refreshClicked), keyEquivalent: "r")
+            title: L("立即刷新", "Refresh now"), action: #selector(refreshClicked), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
 
         let settingsItem = NSMenuItem(
-            title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+            title: L("设置…", "Settings…"), action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         let quitItem = NSMenuItem(
-            title: "退出 \(AppBrand.name)", action: #selector(quitClicked), keyEquivalent: "q")
+            title: L("退出 \(AppBrand.name)", "Quit \(AppBrand.name)"),
+            action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -450,17 +466,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(header)
 
         if state.isLoading {
-            menu.addItem(infoRow("  读取中…", color: .secondaryLabelColor))
+            menu.addItem(infoRow(L("  读取中…", "  Loading…"), color: .secondaryLabelColor))
             return
         }
         if let fiveHour = state.fiveHour {
-            menu.addItem(windowRow(label: "5 小时", window: fiveHour, emphasized: true))
+            menu.addItem(windowRow(label: L("5 小时", "5-hour"), window: fiveHour, emphasized: true))
         }
         if let weekly = state.weekly {
-            menu.addItem(windowRow(label: "7 天 ", window: weekly, emphasized: false))
+            menu.addItem(windowRow(label: L("7 天 ", "7-day "), window: weekly, emphasized: false))
         }
         if state.fiveHour == nil, state.weekly == nil, state.error == nil {
-            menu.addItem(infoRow("  暂无用量数据", color: .secondaryLabelColor))
+            menu.addItem(infoRow(L("  暂无用量数据", "  No usage data"), color: .secondaryLabelColor))
         }
         if let error = state.error {
             menu.addItem(infoRow("  ⚠ " + error, color: .systemRed))
@@ -498,7 +514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .foregroundColor: color,
         ]))
         if let reset = window.resetAt {
-            line.append(NSAttributedString(string: "    重置 " + relativeText(reset), attributes: [
+            line.append(NSAttributedString(string: L("    重置 ", "    resets ") + relativeText(reset), attributes: [
                 .font: font,
                 .foregroundColor: NSColor.secondaryLabelColor,
             ]))
@@ -508,8 +524,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func lastUpdatedText() -> String {
-        guard let updated = model.lastUpdated else { return "尚未更新" }
-        return "更新于 " + clockText(updated)
+        guard let updated = model.lastUpdated else { return L("尚未更新", "Not updated yet") }
+        return L("更新于 ", "Updated ") + clockText(updated)
     }
 
     private func logStatus() {
@@ -536,7 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if isRefreshing {
             Task { @MainActor in await refreshQuip() }
         } else {
-            refresh(thenRefreshQuip: true, userInitiated: true)
+            refresh(thenRefreshQuip: true)
         }
     }
 
@@ -561,6 +577,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 把配置里的续费日、图表偏好等设置应用到面板模型。
     private func applyConfig(_ config: HeyCCConfig) {
+        // 先切全局语言，再改 model（@Published 触发的面板重绘会读到新语言）。
+        appLanguage = config.language
+        model.language = config.language
         model.claudeRenewalDay = config.claudeRenewalDay
         model.codexRenewalDay = config.codexRenewalDay
         model.userName = config.userName

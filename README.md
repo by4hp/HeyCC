@@ -1,39 +1,39 @@
 # HeyCC
 
-<p align="right"><a href="README.md">中文</a> · <a href="README.en.md">English</a></p>
+<p align="right"><a href="README.md">English</a> · <a href="README.zh.md">中文</a></p>
 
-把 **Claude Code** 与 **Codex** 的用量额度塞进 macOS 菜单栏的小工具。一眼看到两边的 5 小时额度还剩多少，不用切到终端敲 `/status`，也不用翻网页。
+A tiny macOS menu bar tool that puts the usage quotas of **Claude Code** and **Codex** right in your menu bar. See at a glance how much of each side's 5-hour quota is left — no need to switch to the terminal and type `/status`, no need to dig through a web page.
 
-> 个人自用的精简版，灵感与 Claude / Codex 品牌图标来自 [steipete/CodexBar](https://github.com/steipete/CodexBar)。
+> A trimmed-down personal build. Inspiration and the Claude / Codex brand icons come from [steipete/CodexBar](https://github.com/steipete/CodexBar).
 
 <p align="center">
-  <img src="docs/panel.png" width="332" alt="刘海悬浮面板">
+  <img src="docs/panel.png" width="332" alt="Notch hover panel">
 </p>
 
 <p align="center">
-  <img src="docs/notch.png" width="620" alt="面板从刘海展开">
+  <img src="docs/notch.png" width="620" alt="Panel expanding from the notch">
 </p>
 
-<p align="center"><sub>鼠标移到刘海上，面板向下展开 —— 额度、续费、可切周/月的用量热力图，加底部那只会说俏皮话的像素小精灵</sub></p>
+<p align="center"><sub>Move the cursor over the notch and the panel slides down — quota, renewal countdown, a weekly/monthly usage heatmap, plus a pixel sprite at the bottom that drops witty one-liners</sub></p>
 
-## 功能
+## Features
 
-- **菜单栏常驻** —— 直接显示 Claude 与 Codex 的 5 小时额度百分比；平时黑色低调，剩余额度 ≤10% 时转红示警。
-- **下拉菜单** —— 5 小时 / 7 天额度进度条 + 重置倒计时，一键「立即刷新」。
-- **刘海悬浮面板**（带刘海的 Mac）—— 鼠标移到刘海上即展开，显示额度、订阅套餐、续费倒计时，以及用量热力图。
-- **用量热力图** —— 悬浮面板里的图表顶部可切「周 / 月」：周视图为最近 7 天 × 12 个 2 小时段，月视图为近三个月（13 周）的 GitHub 贡献图样式。Claude 与 Codex 的区分方式可在设置里选「双色合并」（每格按主导方在橙 ↔ 青之间着色）或「切换显示」（顶部按钮切 合计 / Claude / Codex）。
-- **订阅套餐自动识别** —— Claude 套餐读自本机钥匙串凭证，Codex 套餐读自官方接口，无需手动配置。
-- **像素小精灵** —— 面板底部住着一只像素吉祥物：会浮动眨眼、随光标左右转头，鼠标悬停会凑近，点一下会蹦起来、迸星星并换它说的俏皮话；生成文案时进入思考态，新文案出来会短暂庆祝，额度告急（5 小时用量 ≥85%）时冒汗发愁、临界或读取出错时示警，深夜还会犯困打盹。
-- **DeepSeek 俏皮总结**（可选）—— 小精灵每 30 分钟结合用量、重置/续费时间、本周写码节奏，说一句俏皮的中文提醒，打字机逐字浮现。
-- **玻璃质感设置窗口** —— 菜单「设置…」打开磨砂玻璃风格窗口：日历选续费日、给小精灵起对你的称呼、填 DeepSeek Key。
+- **Lives in the menu bar** — shows the 5-hour quota percentage for Claude and Codex directly; subtle black by default, turning red to warn you when the remaining quota drops to ≤10%.
+- **Dropdown menu** — 5-hour / 7-day quota progress bars plus reset countdowns, with a one-click "Refresh now".
+- **Notch hover panel** (on Macs with a notch) — move the cursor over the notch to expand it, showing quota, subscription plan, renewal countdown, and the usage heatmap.
+- **Usage heatmap** — the chart at the top of the hover panel toggles between "Week / Month": the weekly view is the last 7 days × twelve 2-hour slots, while the monthly view is a GitHub-contribution-style grid of the last three months (13 weeks). How Claude vs. Codex are distinguished can be set to "two-color merge" (each cell shaded between orange ↔ cyan by the dominant side) or "toggle display" (a button at the top switches between Total / Claude / Codex).
+- **Automatic subscription detection** — the Claude plan is read from the local keychain credentials, the Codex plan from the official API; no manual setup needed.
+- **Pixel sprite** — a pixel mascot lives at the bottom of the panel: it floats and blinks, turns its head to follow the cursor, leans in on hover, and when clicked it hops up, bursts into stars, and swaps to a new quip. It enters a thinking state while generating text, briefly celebrates when a new line appears, breaks into a worried sweat when the quota runs low (5-hour usage ≥85%), warns you at critical levels or read errors, and dozes off late at night.
+- **DeepSeek witty summaries** (optional) — every 30 minutes the sprite combines your usage, reset/renewal times, and the week's coding rhythm into a witty one-liner (in Chinese), revealed character by character like a typewriter.
+- **Glass-style settings window** — "Settings…" in the menu opens a frosted-glass window: pick renewal days on a calendar, set what the sprite calls you, and enter your DeepSeek key.
 
-## 环境要求
+## Requirements
 
-- macOS 13 及以上（刘海面板需要带刘海的机型，其余功能不挑机型）
-- Swift 6 工具链（Xcode 16+ 或独立 Swift toolchain）
-- 已在终端登录过 `claude` 与 `codex` CLI —— 用于读取本地凭证
+- macOS 13 or later (the notch panel needs a notch-equipped Mac; the rest works on any model)
+- Swift 6 toolchain (Xcode 16+ or a standalone Swift toolchain)
+- Already signed in to the `claude` and `codex` CLIs in your terminal — used to read local credentials
 
-## 构建与安装
+## Build & install
 
 ```bash
 git clone https://github.com/by4hp/codexbar-mini.git
@@ -42,62 +42,62 @@ cd codexbar-mini
 open HeyCC.app
 ```
 
-装进「应用程序」：
+Install into your Applications folder:
 
 ```bash
 cp -r HeyCC.app /Applications/ && open /Applications/HeyCC.app
 ```
 
-App 没有 Dock 图标，只待在菜单栏。
+The app has no Dock icon — it stays in the menu bar.
 
-## 配置 DeepSeek 俏皮总结（可选）
+## Configure DeepSeek witty summaries (optional)
 
-不配置也能正常用，只是看不到面板底部那行俏皮话。
+Everything works without it; you just won't see that witty line at the bottom of the panel.
 
-1. 到 [DeepSeek 开放平台](https://platform.deepseek.com/api_keys) 申请一个 API Key。
-2. 把 Key 填进去，两种方式任选其一：
-   - 点菜单栏图标 →「设置…」→ 填入 DeepSeek API Key（推荐）；
-   - 或直接编辑 `~/.heycc/config.json`（首次运行 App 会自动生成模板）的 `deepseek_api_key` 字段。
+1. Get an API key from the [DeepSeek open platform](https://platform.deepseek.com/api_keys).
+2. Add the key in one of two ways:
+   - Click the menu bar icon → "Settings…" → enter the DeepSeek API Key (recommended); or
+   - Edit the `deepseek_api_key` field directly in `~/.heycc/config.json` (a template is auto-generated the first time you run the app).
 
-3. 文案在启动后生成一次，之后每 30 分钟刷新；点菜单里的「立即刷新」也会重新生成。
+3. The text is generated once at startup, then refreshed every 30 minutes; clicking "Refresh now" in the menu also regenerates it.
 
-用的是 `deepseek-v4-flash` 模型并关闭了思考模式，单次约 30 token，成本基本可忽略。
+It uses the `deepseek-v4-flash` model with thinking mode off — about 30 tokens per call, so the cost is essentially negligible.
 
-## 个性化
+## Personalization
 
-点菜单栏图标 →「设置…」：
+Click the menu bar icon → "Settings…":
 
-- **订阅套餐** —— 自动识别，只读展示，无需配置。
-- **每月续费日** —— 在日历上给 Claude 与 Codex 各选一天。
-- **悬浮窗图表** —— 选 Claude / Codex 的区分方式（双色合并 / 切换显示）与默认时间范围（最近 7 天 / 最近三个月）；时间范围也能在图表顶部直接切换。
-- **称呼** —— 小精灵在俏皮总结里怎么称呼你。
-- **DeepSeek API Key** —— 填了才有俏皮总结。
+- **Subscription plan** — auto-detected, read-only, no configuration needed.
+- **Monthly renewal day** — pick a day on the calendar for each of Claude and Codex.
+- **Panel chart** — choose how Claude / Codex are distinguished (two-color merge / toggle display) and the default time range (last 7 days / last three months); the time range can also be switched right at the top of the chart.
+- **Nickname** — what the sprite calls you in its witty summaries.
+- **DeepSeek API Key** — required for witty summaries.
 
-所有设置保存在 `~/.heycc/config.json`，也可直接手编。旧版 `~/.nibbi/config.json` 与 `~/.dee_codexbar/config.json` 会在首次启动时自动按顺序兜底迁移。
+All settings are saved in `~/.heycc/config.json` and can be edited by hand. Legacy `~/.nibbi/config.json` and `~/.dee_codexbar/config.json` files are automatically migrated in order on first launch.
 
-## 隐私说明
+## Privacy
 
-- 额度数据来自各家**官方接口**：Claude 走 `api.anthropic.com/api/oauth/usage`，Codex 走 `chatgpt.com/backend-api/wham/usage`；凭证从本机钥匙串 / `~/.codex/auth.json` 读取，只用于这两个请求。
-- 热力图通过扫描本地会话日志（`~/.claude/projects`、`~/.codex/sessions`）统计近三个月的 token，**全程在本机完成**。
-- 仅当你配置了 DeepSeek Key 时，才会把**用量百分比、续费日期等概要信息**（不含任何代码或对话内容）发送给 DeepSeek 用于生成文案。
+- Quota data comes from each vendor's **official API**: Claude via `api.anthropic.com/api/oauth/usage`, Codex via `chatgpt.com/backend-api/wham/usage`; credentials are read from the local keychain / `~/.codex/auth.json` and used only for these two requests.
+- The heatmap is computed by scanning local session logs (`~/.claude/projects`, `~/.codex/sessions`) for tokens over the last three months — **entirely on your machine**.
+- Only when you have configured a DeepSeek key does it send **summary info such as usage percentages and renewal dates** (no code or conversation content whatsoever) to DeepSeek to generate the quips.
 
-## 项目结构
+## Project structure
 
-| 文件 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `Usage.swift` | 读取凭证、拉取 Claude / Codex 官方用量接口与套餐等级 |
-| `History.swift` | 扫描本地会话日志，聚合近 13 周 token 用量（供周/月热力图） |
-| `Config.swift` | 读写 `~/.heycc/config.json`（续费日、称呼、DeepSeek Key、图表偏好） |
-| `Subscription.swift` | 每月续费日的日期计算 |
-| `Quip.swift` | 以小精灵口吻调用 DeepSeek 生成俏皮总结 |
-| `PixelPet.swift` | 像素小精灵：精灵图、表情帧与交互动效 |
-| `Settings.swift` | 玻璃质感「设置」窗口 |
-| `AppDelegate.swift` | 菜单栏图标、下拉菜单、定时刷新 |
-| `NotchController.swift` / `NotchPanel.swift` | 刘海悬浮面板的定位与界面 |
+| `Usage.swift` | Reads credentials, fetches the Claude / Codex official usage APIs and plan tiers |
+| `History.swift` | Scans local session logs, aggregates the last 13 weeks of token usage (for the weekly/monthly heatmap) |
+| `Config.swift` | Reads/writes `~/.heycc/config.json` (renewal days, nickname, DeepSeek key, chart preferences) |
+| `Subscription.swift` | Date math for the monthly renewal day |
+| `Quip.swift` | Calls DeepSeek to generate witty summaries in the sprite's voice |
+| `PixelPet.swift` | The pixel sprite: sprite sheets, expression frames, and interaction animations |
+| `Settings.swift` | The glass-style "Settings" window |
+| `AppDelegate.swift` | Menu bar icon, dropdown menu, scheduled refresh |
+| `NotchController.swift` / `NotchPanel.swift` | Positioning and UI of the notch hover panel |
 
-## 致谢
+## Credits
 
-灵感与 Claude / Codex 品牌图标来自 [steipete/CodexBar](https://github.com/steipete/CodexBar)。
+Inspiration and the Claude / Codex brand icons come from [steipete/CodexBar](https://github.com/steipete/CodexBar).
 
 ## License
 
