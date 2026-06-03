@@ -1,5 +1,7 @@
 # HeyCC
 
+<p align="right"><a href="README.md">中文</a> · <a href="README.en.md">English</a></p>
+
 把 **Claude Code** 与 **Codex** 的用量额度塞进 macOS 菜单栏的小工具。一眼看到两边的 5 小时额度还剩多少，不用切到终端敲 `/status`，也不用翻网页。
 
 > 个人自用的精简版，灵感与 Claude / Codex 品牌图标来自 [steipete/CodexBar](https://github.com/steipete/CodexBar)。
